@@ -1,0 +1,20 @@
+=== Image Editing Metadata ===
+Timestamp: 20251213_073015
+Input image: /inspire/hdd/global_user/hejunjun-24017/junzhin/data/bagel/annotation_medq-Uni/images/IXI-T1/process/high_res/IXI322-IOP-0891-T1/020_motion.png
+Input size: (256, 256)
+Target size: (256, 256)
+
+=== Edit Instruction ===
+
+As an image quality optimizer, enhance this medical image to improve visual quality while maintaining anatomical consistency and structural integrity. Please address the motion artifacts present in the input image.
+
+
+=== Understanding Mode Context ===
+To optimize the image quality, I will use motion artifact reduction algorithms to enhance the clarity. This will involve stabilizing the image to reduce blurring caused by patient movement during scanning, and applying deconvolution techniques to improve spatial resolution. Additionally, I will enhance the contrast and sharpness of the image using appropriate filters while preserving the anatomical details.
+
+=== Generation Parameters ===
+cfg_text_scale: 4.0
+cfg_img_scale: 2.0
+num_timesteps: 50
+timestep_shift: 3.0
+seed: 42

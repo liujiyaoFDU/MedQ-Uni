@@ -1,0 +1,37 @@
+# ============================================================================
+# Generation-Only Benchmark Configuration
+# ============================================================================
+# Purpose: Test pure generation capability without understanding branch
+# Key settings:
+#   - Only T2IIterableDataset (no VQA dataset)
+#   - Used with visual_gen=True, visual_und=False
+#   - Only MSE Loss will be computed
+# ============================================================================
+
+T2IIterableDataset_Ver1:
+  # 新的分组配置格式：dataset_names 是字典，每个键是分组名
+  dataset_names:
+    stage2_additional:  # 医学数据高优先级组
+    - healthgpt_generation_T2I
+    stage1:  # 通用数据中等优先级组
+    - ALLaVA_Caption_LAION_4V
+    - gmaivl_caption_from_clsdataset
+    - pubmedvision_gen
+    - CFP_processed_data_Generation
+    - CFP_processed_data_Generation2
+  # 对应的权重配置
+  weight:
+    stage2_additional: 20
+    stage1: 25
+  # 对应的数据使用量配置
+  num_used_data:
+    stage2_additional: [0]
+    stage1: [0, 0, 0, 0, 0]
+  # 公共配置参数
+  image_transform_args:
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 512
+  is_mandatory: true
+  shuffle_lines: True
+  shuffle_seed: 42

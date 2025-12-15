@@ -1,0 +1,100 @@
+# ============================================================================
+# 训练集配置（使用分割后的train版本）
+# ============================================================================
+# 说明：
+# 1. VQA_RAD, Slake, GMAI_Reasoning10K 使用分割后的 *_train.jsonl 版本
+# 2. 其他数据集保持原样（未分割）
+# 3. 训练集和验证集物理分离，确保无数据泄露
+# 4. 需要先运行 scripts/utils/split_train_val_datasets.py 生成分割文件
+# ============================================================================
+
+T2IIterableDataset_Ver1:
+  # 新的分组配置格式：dataset_names 是字典，每个键是分组名
+  dataset_names:
+    stage2_additional:  # 医学数据高优先级组
+    - healthgpt_generation_T2I
+    stage1:  # 通用数据中等优先级组
+    - ALLaVA_Caption_LAION_4V
+    - gmaivl_caption_from_clsdataset
+    - pubmedvision_gen
+    - CFP_processed_data_Generation
+    - CFP_processed_data_Generation2
+  # 对应的权重配置
+  weight:
+    stage2_additional: 20
+    stage1: 25
+  # 对应的数据使用量配置
+  num_used_data:
+    stage2_additional: [0]
+    stage1: [0, 0, 0, 0, 0]
+  # 公共配置参数
+  image_transform_args:
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 512
+  is_mandatory: true
+  shuffle_lines: True
+  shuffle_seed: 42
+
+SftJSONLIterableDataset_Ver1:
+  # 新的分组配置格式
+  dataset_names:
+    stage2_critical:  # Stage2关键数据组
+    - GMAI_Reasoning10K_train  # ✅ 使用train版本
+    - healthgpt_comprehension_gpt
+    - wanglab_chest_agent_bench
+    - RadRBench_CXR_mimic
+
+    stage1:  # 基础医学数据组
+    - VQA_RAD_train           # ✅ 使用train版本
+    - Slake_train             # ✅ 使用train版本
+    - CheXpertPlus
+    - mimic_cxr
+    - cls_100w_sft_data_internvl
+    - det2d_vqa_500_internvl
+    - gmai_vl_shortanswer
+    - ImageClef-2019-VQA-Med
+    - llava_v1_5_mix665k_correct_v4
+    - LLaVA_Med_Caption
+    - Medical_Diff_VQA
+    - medication_qa_vqa
+    - medpix_single
+    - openI_official
+    - Pathology_VQA
+    - PMC_CaseReport
+    - PMC_VQA
+    - PMC_Inline
+    - PMC_Inline_multi_image
+    - PMC_OA
+    - pubmed_cuhksz
+    - pubmedvision
+    - quilt_1m
+    - RetinaImageBank
+    - ROCOV2
+    - seg2d_vqa_500_internvl
+    - sft_93k_internvl
+    - CFP_processed_data_QA
+
+  # 对应的权重配置
+  weight:
+    stage2_critical: 15
+    stage1: 25
+
+  # 对应的数据使用量配置
+  num_used_data:
+    stage2_critical: [0, 0, 0, 0]
+    stage1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  # 公共配置参数
+  image_transform_args:
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 512
+  vit_image_transform_args:
+    image_stride: 14
+    max_image_size: 980
+    min_image_size: 378
+    max_pixels: 2_007_040
+  is_mandatory: true
+  shuffle_lines: True
+  shuffle_seed: 42

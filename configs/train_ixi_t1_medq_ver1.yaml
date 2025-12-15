@@ -1,0 +1,31 @@
+# IXI T1 Medical Quality Enhancement Training Configuration
+# Purpose: Fine-tune model for medical image quality enhancement tasks
+# Tasks covered:
+#   - Motion correction (去运动伪影)
+#   - Denoising (去噪)
+#   - Accelerating MRI reconstruction (欠采样重建)
+# Dataset: 58,377 training samples from IXI T1 dataset
+
+MedicalImageEditingIterableDataset_ver1:
+  dataset_names:
+    ixi_t1_medq:
+    - ixi_t1_medq_train
+  image_transform_args:
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 512
+
+  vit_image_transform_args:
+    image_stride: 14
+    max_image_size: 518
+    min_image_size: 224
+
+  is_mandatory: true
+  shuffle_lines: true
+  shuffle_seed: 42
+
+  num_used_data:
+    ixi_t1_medq: [0]
+
+  weight:
+    ixi_t1_medq: 20
