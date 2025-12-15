@@ -5,7 +5,7 @@
 # ============================================================================
 # Purpose: Fine-tune model for medical image quality enhancement
 # Dataset: IXI T1 (58,377 samples) - Motion/Denoise/Undersampling tasks
-# Base model: Uni-MedVL pretrained checkpoint
+# Base model: MedQ-Uni pretrained checkpoint
 
 # bash scripts/training/train_sft_ixi_t1_medq_ver1.sh ixi_t1_medq_1ep_ver1 4 2345
 
@@ -15,12 +15,12 @@
 # 用户环境配置
 source /inspire/hdd/global_user/hejunjun-24017/junzhin/.bashrc
 
-cd /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL
+cd /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni
 
 # bash scripts/training/train_sft_ixi_t1_medq_ver1.sh ixi_t1_medq_1ep_ver1 4 2345
 
 # 项目路径配置
-SCRIPT_DIR="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL"
+SCRIPT_DIR="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni"
 
 # 模型路径配置（需要提供预训练checkpoint路径）
 MODEL_PATH="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/medical_unified_project/models_checkpoints/unimedvl/unimedvl_model_checkpoint_upload"  # TODO: 指定预训练模型路径
@@ -110,7 +110,7 @@ torchrun \
   --max_checkpoints 4 \
   --checkpoint_dir "${SCRIPT_DIR}/output/${EXP_NAME}" \
   --model_path "${MODEL_PATH}" \
-  --resume_from "/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/output/ixi_t1_medq_4ep_ver1" \
+  --resume_from "/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/output/ixi_t1_medq_4ep_ver1" \
   --resume_model_only False \
   --resume_model_optimizer True \
   --finetune_from_hf True \

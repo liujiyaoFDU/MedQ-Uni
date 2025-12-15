@@ -40,7 +40,7 @@ from accelerate import infer_auto_device_map, load_checkpoint_and_dispatch, init
 from safetensors.torch import load_file, save_file
 
 # UniMedVL imports
-ROOT = "/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/"
+ROOT = "/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/"
 sys.path.append(ROOT)
 
 from data.transforms import ImageTransform
@@ -741,7 +741,7 @@ def parse_args():
     
     # 模型路径
     parser.add_argument('--model_path', type=str,
-                       default='/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/output/ixi_t1_medq_1ep_ver1/0000600',
+                       default='/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/output/ixi_t1_medq_1ep_ver1/0000600',
                        help='Path to model checkpoint')
 
     # Checkpoint selection

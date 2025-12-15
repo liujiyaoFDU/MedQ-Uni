@@ -1,11 +1,11 @@
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v3/sensitivity_exp1_ce4.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v3/sensitivity_exp2_ce2.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v3/sensitivity_exp3_ce1.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v3/sensitivity_exp4_ce0.5_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v3/sensitivity_exp5_ce0.25_mse1.0.sh 
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v4/sensitivity_exp1_ce4.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v4/sensitivity_exp2_ce2.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v4/sensitivity_exp3_ce1.0_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v4/sensitivity_exp4_ce0.5_mse1.0.sh
-bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/scripts/sensitivity_v4/sensitivity_exp5_ce0.25_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v3/sensitivity_exp1_ce4.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v3/sensitivity_exp2_ce2.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v3/sensitivity_exp3_ce1.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v3/sensitivity_exp4_ce0.5_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v3/sensitivity_exp5_ce0.25_mse1.0.sh 
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v4/sensitivity_exp1_ce4.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v4/sensitivity_exp2_ce2.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v4/sensitivity_exp3_ce1.0_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v4/sensitivity_exp4_ce0.5_mse1.0.sh
+bash /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/scripts/sensitivity_v4/sensitivity_exp5_ce0.25_mse1.0.sh
 

@@ -18,7 +18,7 @@
 source /inspire/hdd/global_user/hejunjun-24017/junzhin/.bashrc
 
 
-SCRIPT_DIR="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL"
+SCRIPT_DIR="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni"
 eval "$(conda shell.bash hook)"
 conda activate bagel
 cd "${SCRIPT_DIR}"

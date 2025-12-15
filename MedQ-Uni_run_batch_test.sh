@@ -11,7 +11,7 @@ conda activate bagel
 ANNOTATION_FILE="/inspire/hdd/global_user/hejunjun-24017/junzhin/data/bagel/annotation_medq-Uni/annotation/ixi_t1_sr_4x_test.jsonl"
 IMAGE_ROOT="/inspire/hdd/global_user/hejunjun-24017/junzhin/data/bagel/annotation_medq-Uni/images"
 OUTPUT_DIR="MedQ-Uni_results/ixi_t1_medq_4ep_ver1_5000_$(date +%Y%m%d_%H%M%S)"
-MODEL_PATH="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL/output/ixi_t1_medq_4ep_ver1/ixi_t1_medq_4ep_ver1/0005000"
+MODEL_PATH="/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/output/ixi_t1_medq_4ep_ver1/ixi_t1_medq_4ep_ver1/0005000"
 
 # GPU 设置
 TARGET_GPU="1"

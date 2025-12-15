@@ -16,7 +16,7 @@ echo ""
 echo "[STEP 0] Setting up environment..."
 
 source /inspire/hdd/global_user/hejunjun-24017/junzhin/.bashrc
-cd /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/Uni-MedVL
+cd /inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni
 
 eval "$(conda shell.bash hook)"
 conda activate bagel
