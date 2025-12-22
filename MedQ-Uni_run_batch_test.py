@@ -352,6 +352,11 @@ class BatchTester:
                 sample = json.loads(line)
                 sample['sample_id'] = idx  # 添加唯一 ID
                 annotations.append(sample)
+                
+                # 如果指定了样本数量限制，则只加载前N个样本
+                if self.args.num_samples > 0 and len(annotations) >= self.args.num_samples:
+                    break
+        
         return annotations
     
     def get_image_path(self, relative_path: str) -> str:
@@ -504,25 +509,27 @@ class BatchTester:
             
             # 保存生成的图像 - 使用层级路径结构
             # 例如：input_img 是 "IXI-T1/process/high_res/IXI322-IOP-0891-T1/021_noise.png"
-            # 则保存为 "images/IXI-T1/process/high_res/IXI322-IOP-0891-T1/021_pred.png"
+            # 则保存为 "images/IXI-T1/process/high_res/IXI322-IOP-0891-T1/021_noise_input.png"等
             input_path_parts = Path(input_relative_path)
             output_path_parts = Path(output_relative_path)
             
-            # 获取基础文件名（例如从 021_noise.png 或 021.png 获取 021）
-            base_filename = input_path_parts.stem.split('_')[0]
+            # 获取基础文件名（完整的文件名，不含扩展名）
+            base_filename = input_path_parts.stem
             
             # 构建保存路径（使用 input_img 的目录结构）
             save_dir = self.images_dir / input_path_parts.parent
             save_dir.mkdir(parents=True, exist_ok=True)
             
-            # 保存三张图像到同一目录
-            # 1. 输入图像（保留原始文件名）
-            input_save_path = save_dir / input_path_parts.name
+            # 保存三张图像到同一目录，统一命名规范
+            # 1. 输入图像（使用 _input 后缀）
+            input_filename = f"{base_filename}_input.png"
+            input_save_path = save_dir / input_filename
             input_image.save(input_save_path)
             input_relative_save_path = input_save_path.relative_to(self.images_dir)
             
-            # 2. 真值图像（保留原始文件名）
-            gt_save_path = save_dir / output_path_parts.name
+            # 2. 真值图像（使用 _GT 后缀）
+            gt_filename = f"{base_filename}_GT.png"
+            gt_save_path = save_dir / gt_filename
             gt_image.save(gt_save_path)
             gt_relative_save_path = gt_save_path.relative_to(self.images_dir)
             
@@ -622,7 +629,14 @@ class BatchTester:
         # 加载 annotation
         print(f"Loading annotation from: {self.args.annotation_file}")
         annotations = self.load_annotation()
-        print(f"Total samples: {len(annotations)}")
+        
+        # 显示样本数量信息
+        if self.args.num_samples > 0:
+            print(f"Sample limit: {self.args.num_samples} (partial testing mode)")
+        else:
+            print(f"Sample limit: ALL (full testing mode)")
+        
+        print(f"Total samples loaded: {len(annotations)}")
         print(f"Already processed: {len(self.processed_samples)}")
         print(f"Remaining: {len(annotations) - len(self.processed_samples)}")
         
@@ -774,6 +788,10 @@ def parse_args():
                        help='Use sampling for text generation (default: greedy)')
     parser.add_argument('--text_temperature', type=float, default=0.3,
                        help='Temperature for text sampling')
+    
+    # 样本数量控制
+    parser.add_argument('--num_samples', type=int, default=-1,
+                       help='Number of samples to test (default: -1 for all samples)')
     
     return parser.parse_args()
 

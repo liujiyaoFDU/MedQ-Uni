@@ -865,6 +865,142 @@ DATASET_INFO = {
             'data_dir': '/inspire/hdd/global_user/hejunjun-24017/junzhin/data',
             'jsonl_path': '/inspire/hdd/global_user/hejunjun-24017/junzhin/data/seg/VinDr_RibCXR/processed/simple/VinDr_RibCXR_train_simple.jsonl',
             'num_total_samples': 1
+        },
+        # ============================================================================
+        # Stage1 MedQ Unified Datasets - Medical Image Quality Enhancement
+        # Base directory: /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset
+        # ============================================================================
+        # X-ray Bone Shadow Suppression
+        'xray_bone_shadow_suppression_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/xray-bone-shadow-suppression_train.jsonl',
+            'num_total_samples': 1
+        },
+        'xray_bone_shadow_suppression_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/xray-bone-shadow-suppression_test.jsonl',
+            'num_total_samples': 1
+        },
+        # UDPET Dataset
+        'UDPET_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/UDPET_train.jsonl',
+            'num_total_samples': 1
+        },
+        'UDPET_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/UDPET_test.jsonl',
+            'num_total_samples': 1
+        },
+        # Refuge Restoration Dataset
+        'refuge_restoration_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/refuge_restoration_train.jsonl',
+            'num_total_samples': 1
+        },
+        'refuge_restoration_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/refuge_restoration_test.jsonl',
+            'num_total_samples': 1
+        },
+        # Real Fundus Restoration Dataset
+        'real_fundus_restoration_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/real_fundus_restoration_train.jsonl',
+            'num_total_samples': 1
+        },
+        'real_fundus_restoration_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/real_fundus_restoration_test.jsonl',
+            'num_total_samples': 1
+        },
+        # MR Art Motion Correction Dataset
+        'mr_art_motion_correction_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/mr_art_motion_correction_train.jsonl',
+            'num_total_samples': 1
+        },
+        'mr_art_motion_correction_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/mr_art_motion_correction_test.jsonl',
+            'num_total_samples': 1
+        },
+        # IXI T2 Super-Resolution 4x Dataset
+        'ixi_t2_sr_4x_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/ixi_t2_sr_4x_train.jsonl',
+            'num_total_samples': 1
+        },
+        'ixi_t2_sr_4x_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/ixi_t2_sr_4x_test.jsonl',
+            'num_total_samples': 1
+        },
+        # IXI T1 Super-Resolution 4x Dataset
+        'ixi_t1_sr_4x_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/ixi_t1_sr_4x_train.jsonl',
+            'num_total_samples': 1
+        },
+        'ixi_t1_sr_4x_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/ixi_t1_sr_4x_test.jsonl',
+            'num_total_samples': 1
+        },
+        # EyeQ Restoration Dataset
+        'eyeq_restoration_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/eyeq_restoration_train.jsonl',
+            'num_total_samples': 1
+        },
+        'eyeq_restoration_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/eyeq_restoration_test.jsonl',
+            'num_total_samples': 1
+        },
+        # AMIR PET Low-dose Denoising Dataset
+        'AMIR_PET_low_dose_PET_denoising_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_PET_low-dose_PET_denoising_train.jsonl',
+            'num_total_samples': 1
+        },
+        'AMIR_PET_low_dose_PET_denoising_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_PET_low-dose_PET_denoising_test.jsonl',
+            'num_total_samples': 1
+        },
+        # AMIR MRI Super-Resolution Dataset
+        'AMIR_MRI_super_resolution_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_MRI_super-resolution_train.jsonl',
+            'num_total_samples': 1
+        },
+        'AMIR_MRI_super_resolution_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_MRI_super-resolution_test.jsonl',
+            'num_total_samples': 1
+        },
+        # AMIR CT Low-Dose Denoising Dataset
+        'AMIR_CT_Low_Dose_CT_denoising_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_CT_Low-Dose_CT_denoising_train.jsonl',
+            'num_total_samples': 1
+        },
+        'AMIR_CT_Low_Dose_CT_denoising_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AMIR_CT_Low-Dose_CT_denoising_test.jsonl',
+            'num_total_samples': 1
+        },
+        # AAPM CT MAR (Metal Artifact Reduction) Dataset
+        'AAPM_CT_MAR_train': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AAPM-CT-MAR_train.jsonl',
+            'num_total_samples': 1
+        },
+        'AAPM_CT_MAR_test': {
+            'data_dir': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images',
+            'jsonl_path': '/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/annotation/stage1/AAPM-CT-MAR_test.jsonl',
+            'num_total_samples': 1
         }
     },
     "CounterfactualMedicalIterableDataset_ver1": {

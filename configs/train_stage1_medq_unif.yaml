@@ -1,0 +1,78 @@
+# ============================================================================
+# Stage1 MedQ Unified Training Configuration
+# ============================================================================
+# Purpose: Unified training for medical image quality enhancement
+# Tasks covered:
+#   - X-ray bone shadow suppression
+#   - PET image quality enhancement (UDPET)
+#   - Fundus image restoration (Refuge, Real Fundus, EyeQ)
+#   - MRI motion artifact correction
+#   - MRI super-resolution (IXI T1/T2 4x)
+#   - PET low-dose denoising (AMIR)
+#   - MRI super-resolution (AMIR)
+#   - CT low-dose denoising (AMIR)
+#   - CT metal artifact reduction (AAPM)
+# Total: 12 datasets with 24 annotation files (train/test splits)
+# Base image directory: /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images
+
+MedicalImageEditingIterableDataset_ver1:
+  # Dataset names grouped under stage1_medq_unif
+  dataset_names:
+    stage1_medq_unif:
+    # X-ray Quality Enhancement
+    - xray_bone_shadow_suppression_train
+    - xray_bone_shadow_suppression_test
+    # PET Quality Enhancement
+    - UDPET_train
+    - UDPET_test
+    # Fundus Image Restoration
+    - refuge_restoration_train
+    - refuge_restoration_test
+    - real_fundus_restoration_train
+    - real_fundus_restoration_test
+    - eyeq_restoration_train
+    - eyeq_restoration_test
+    # MRI Motion Artifact Correction
+    - mr_art_motion_correction_train
+    - mr_art_motion_correction_test
+    # MRI Super-Resolution (IXI)
+    - ixi_t2_sr_4x_train
+    - ixi_t2_sr_4x_test
+    - ixi_t1_sr_4x_train
+    - ixi_t1_sr_4x_test
+    # AMIR Datasets - Multi-modal Quality Enhancement
+    - AMIR_PET_low_dose_PET_denoising_train
+    - AMIR_PET_low_dose_PET_denoising_test
+    - AMIR_MRI_super_resolution_train
+    - AMIR_MRI_super_resolution_test
+    - AMIR_CT_Low_Dose_CT_denoising_train
+    - AMIR_CT_Low_Dose_CT_denoising_test
+    # CT Metal Artifact Reduction
+    - AAPM_CT_MAR_train
+    - AAPM_CT_MAR_test
+
+  # VAE image transformation parameters
+  image_transform_args:
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 256
+
+  # ViT image transformation parameters
+  vit_image_transform_args:
+    image_stride: 14
+    max_image_size: 518
+    min_image_size: 224
+
+  # Training parameters
+  is_mandatory: true
+  shuffle_lines: true
+  shuffle_seed: 42
+
+  # Number of samples to use (0 means use all available data)
+  # Order matches dataset_names list above
+  num_used_data:
+    stage1_medq_unif: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  # Sampling weight for this dataset group
+  weight:
+    stage1_medq_unif: 20
