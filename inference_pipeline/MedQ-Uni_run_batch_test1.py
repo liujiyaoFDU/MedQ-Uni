@@ -40,7 +40,7 @@ from accelerate import infer_auto_device_map, load_checkpoint_and_dispatch, init
 from safetensors.torch import load_file, save_file
 
 # UniMedVL imports
-ROOT = "/inspire/hdd/global_user/hejunjun-24017/junzhin/projects/MedQ-Uni/"
+ROOT = "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 sys.path.append(ROOT)
 
 from data.transforms import ImageTransform
