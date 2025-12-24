@@ -63,6 +63,38 @@ from train.fsdp_utils import (
 
 
 
+def load_tensorboard_run_name_from_checkpoint(checkpoint_path, logger):
+    """
+    Load TensorBoard run name from checkpoint metadata.
+    Returns None if not found (legacy checkpoint without metadata).
+
+    Args:
+        checkpoint_path: Path to checkpoint directory
+        logger: Logger instance
+
+    Returns:
+        str or None: TensorBoard run name if found, None for legacy checkpoints
+    """
+    if checkpoint_path is None or not os.path.exists(checkpoint_path):
+        return None
+
+    training_args_file = os.path.join(checkpoint_path, "training_args.json")
+    if os.path.exists(training_args_file):
+        try:
+            import json
+            with open(training_args_file, 'r') as f:
+                data = json.load(f)
+                tensorboard_metadata = data.get('tensorboard_metadata', {})
+                run_name = tensorboard_metadata.get('run_name')
+                if run_name:
+                    logger.info(f"✅ Loaded TensorBoard run_name from checkpoint: {run_name}")
+                    return run_name
+        except Exception as e:
+            logger.warning(f"Failed to load TensorBoard metadata from checkpoint: {e}")
+
+    return None
+
+
 def log_model_parameters(logger, model, language_model, vit_model, vae_model, training_args):
     """Log parameter statistics for each model component."""
 
@@ -490,21 +522,13 @@ def main():
         if dist.get_rank() == 0:
             startup_msgs.append(f"ViT learning rate not set, using default: {training_args.vit_lr}")
 
-    # Setup logging
+    # Setup logging (TensorBoard will be initialized later after resume config is determined)
     if dist.get_rank() == 0:
         os.makedirs(training_args.results_dir, exist_ok=True)
         os.makedirs(training_args.checkpoint_dir, exist_ok=True)
         logger = create_logger(training_args.results_dir, dist.get_rank())
-
-        if training_args.enable_tensorboard:
-            tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard")
-            os.makedirs(tensorboard_dir, exist_ok=True)
-            writer = SummaryWriter(log_dir=tensorboard_dir)
-        else:
-            writer = None
     else:
         logger = create_logger(None, dist.get_rank())
-        writer = None
     dist.barrier()
     
     if dist.get_rank() == 0:
@@ -612,6 +636,43 @@ def main():
     # Set seed
     seed = training_args.global_seed * dist.get_world_size() + dist.get_rank()
     set_seed(seed)
+
+    # Initialize TensorBoard after resume configuration is determined
+    if dist.get_rank() == 0 and training_args.enable_tensorboard:
+        # Smart TensorBoard directory management with backward compatibility
+        tensorboard_run_name = None
+
+        if is_resuming_from_interruption:
+            # Scenario: Resume from interruption (auto_resume)
+            tensorboard_run_name = load_tensorboard_run_name_from_checkpoint(resume_from, logger)
+            if tensorboard_run_name is None:
+                # Legacy checkpoint without metadata → use root directory (backward compatible)
+                tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard")
+                logger.info(f"📂 Legacy checkpoint detected, using root TensorBoard directory")
+            else:
+                # New checkpoint with metadata → use subdirectory
+                tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
+                logger.info(f"📂 Resuming TensorBoard run: {tensorboard_run_name}")
+
+        elif resume_from is not None:
+            # Scenario: Explicit resume (new experiment from checkpoint)
+            ckpt_step = os.path.basename(resume_from)
+            tensorboard_run_name = f"{local_time}_from_{ckpt_step}"
+            tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
+            logger.info(f"📂 Starting new experiment from checkpoint, TensorBoard run: {tensorboard_run_name}")
+
+        else:
+            # Scenario: Fresh training → use timestamped subdirectory
+            tensorboard_run_name = local_time
+            tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
+            logger.info(f"📂 Starting fresh training, TensorBoard run: {tensorboard_run_name}")
+
+        os.makedirs(tensorboard_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=tensorboard_dir)
+        logger.info(f"📊 TensorBoard logs: {tensorboard_dir}")
+    else:
+        writer = None
+        tensorboard_run_name = None
 
     # Setup model
     if training_args.finetune_from_hf:
@@ -1184,6 +1245,8 @@ def main():
                 model_args=model_args,
                 data_args=data_args,
                 training_args=training_args,
+                tensorboard_run_name=tensorboard_run_name if dist.get_rank() == 0 else None,
+                tensorboard_log_dir=tensorboard_dir if (dist.get_rank() == 0 and writer is not None) else None,
             )
             
             if dist.get_rank() == 0:

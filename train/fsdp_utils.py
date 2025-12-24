@@ -784,12 +784,22 @@ class FSDPCheckpoint:
 
             all_training_args = {
                 "model_args": dataclass_to_dict(model_args),
-                "data_args": dataclass_to_dict(data_args), 
+                "data_args": dataclass_to_dict(data_args),
                 "training_args": dataclass_to_dict(training_args),
                 "saved_timestamp": datetime.now().isoformat(),
                 "train_steps": train_steps,
             }
-            
+
+            # Add TensorBoard metadata if provided
+            tensorboard_run_name = kwargs.get('tensorboard_run_name')
+            if tensorboard_run_name:
+                all_training_args["tensorboard_metadata"] = {
+                    "run_name": tensorboard_run_name,
+                    "log_dir": kwargs.get('tensorboard_log_dir'),
+                    "created_at": datetime.now().isoformat(),
+                }
+                logger.debug(f"Saved TensorBoard metadata: run_name={tensorboard_run_name}")
+
             with open(os.path.join(save_path, "training_args.json"), 'w') as f:
                 json.dump(all_training_args, f, indent=2, ensure_ascii=False)
             logger.debug("Saved training_args.json")
