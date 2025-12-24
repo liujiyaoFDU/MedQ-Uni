@@ -25,10 +25,18 @@ CHECKPOINTS=(
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0012000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0008000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0004000"
-"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0002000"
-"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0001500"
-"/"mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/"stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0001000"
-"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0000500"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0002000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0001500"
+# "/"mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/"stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0001000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0000500"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1/0008000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1/0006000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1/0004000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1/0002000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1/0001000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0004000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0006000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_eyeQ_v1/0008000"
 )
 
 
@@ -72,7 +80,7 @@ GPUS=(
 )
 
 IMAGE_ROOT="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images"
-BASE_OUTPUT_DIR="stage1_train_all_eye_ver1"  # 基础输出目录
+BASE_OUTPUT_DIR="stage1_train_50_eye_ctu_stage1_comb_v1"  # 基础输出目录
 
 # 每张卡的显存限制
 MAX_MEM="130GiB"
