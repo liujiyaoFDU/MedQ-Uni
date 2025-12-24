@@ -1008,7 +1008,7 @@ def main():
     def get_unified_vae_model():
         """Get unified VAE model reference"""
         if hasattr(fsdp_model.module, 'vae_model') and fsdp_model.module.vae_model is not None:
-            return fsdp_model.module
+            return fsdp_model.module.vae_model
         elif vae_model is not None:
             return vae_model
         else:

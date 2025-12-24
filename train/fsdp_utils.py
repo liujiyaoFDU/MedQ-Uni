@@ -366,17 +366,35 @@ def fsdp_wrapper_with_ddp(original_model, fsdp_config, ignored_modules=None):
         _logger.debug(f"[Rank {rank}] Found vae_model, preparing for DDP wrapping")
         try:
             original_model.vae_model = original_model.vae_model.cuda(device_id)
-            original_model.vae_model = DDP(
-                original_model.vae_model,
-                device_ids=[device_id],
-                output_device=device_id,
-                broadcast_buffers=False,
-                find_unused_parameters=False,
+
+            vae_has_trainable_params = any(
+                p.requires_grad for p in original_model.vae_model.parameters()
             )
-            ddp_wrapped_modules.append(original_model.vae_model)
-            _logger.info(f"[Rank {rank}] vae_model wrapped with DDP")
+
+            if vae_has_trainable_params:
+                original_model.vae_model = DDP(
+                    original_model.vae_model,
+                    device_ids=[device_id],
+                    output_device=device_id,
+                    broadcast_buffers=False,
+                    find_unused_parameters=False,
+                )
+                ddp_wrapped_modules.append(original_model.vae_model)
+                _logger.info(f"[Rank {rank}] vae_model wrapped with DDP")
+            else:
+                _logger.info(f"[Rank {rank}] vae_model is frozen; skipping DDP wrap")
+
+            ignored_modules.append(original_model.vae_model)
+            if hasattr(original_model.vae_model, "module"):
+                ignored_modules.append(original_model.vae_model.module)
         except Exception as e:
             _logger.warning(f"[Rank {rank}] vae_model DDP wrapping failed: {e}")
+            try:
+                ignored_modules.append(original_model.vae_model)
+                if hasattr(original_model.vae_model, "module"):
+                    ignored_modules.append(original_model.vae_model.module)
+            except Exception:
+                pass
 
     if hasattr(original_model, 'vae_batch_norm') and original_model.vae_batch_norm is not None:
         try:
