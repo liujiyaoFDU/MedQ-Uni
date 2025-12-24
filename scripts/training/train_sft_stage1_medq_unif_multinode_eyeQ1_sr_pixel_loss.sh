@@ -72,7 +72,7 @@ MSE_WEIGHT=1.0
 # NOTE: The loss is gated internally to only apply on paired restoration samples and low-noise timesteps.
 PIXEL_LOSS_WEIGHT=0.05
 PIXEL_LOSS_TYPE="l2"
-PIXEL_LOSS_MAX_T=0.5  # 增加到 0.5，覆盖更多时间步
+PIXEL_LOSS_MAX_T=1.0  # 增加到 1.0，覆盖几乎所有时间步
 
 EMA_DECAY=0.995
 
@@ -217,6 +217,7 @@ torchrun \
   --pixel_loss_weight "${PIXEL_LOSS_WEIGHT}" \
   --pixel_loss_type "${PIXEL_LOSS_TYPE}" \
   --pixel_loss_max_t "${PIXEL_LOSS_MAX_T}" \
+  --pixel_loss_paired_only false \
   --freeze_llm False \
   --freeze_vit True \
   --freeze_vae True \

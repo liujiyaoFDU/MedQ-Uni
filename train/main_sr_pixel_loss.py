@@ -1099,6 +1099,13 @@ def main():
                 raise
 
         # Keep original images only when we need pixel-space loss; otherwise drop to save memory.
+
+        # Data debug: check if padded_images exists
+        if training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[Data Check Step {curr_step}] 'padded_images' in data: {'padded_images' in data}")
+
         if training_args.pixel_loss_weight > 0:
             data['pixel_loss_weight'] = training_args.pixel_loss_weight
             data['pixel_loss_type'] = training_args.pixel_loss_type

@@ -361,6 +361,26 @@ class Bagel(PreTrainedModel):
 
             # Optional pixel-space fidelity loss (for paired restoration tasks such as SR/denoise).
             # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
+
+            # ========== Pixel Loss Entry Diagnostics ==========
+            if self.training and pixel_loss_weight > 0:
+                import logging
+                logger = logging.getLogger(__name__)
+                if dist.get_rank() == 0:
+                    logger.info("="*60)
+                    logger.info("[Pixel Loss Entry] Checking entry conditions")
+                    logger.info(f"  pixel_loss_weight={pixel_loss_weight}")
+                    logger.info(f"  pixel_loss_max_t={pixel_loss_max_t}")
+                    logger.info(f"  padded_images is None: {padded_images is None}")
+                    logger.info(f"  self.vae_model is None: {self.vae_model is None}")
+                    logger.info(f"  patchified_vae_latent_shapes is None: {patchified_vae_latent_shapes is None}")
+                    logger.info(f"  packed_vae_token_indexes is None: {packed_vae_token_indexes is None}")
+                    logger.info(f"  packed_timesteps is None: {packed_timesteps is None}")
+                    if patchified_vae_latent_shapes is not None:
+                        logger.info(f"  len(patchified_vae_latent_shapes)={len(patchified_vae_latent_shapes)}")
+                    logger.info("="*60)
+            # ===================================================
+
             if (
                 self.training
                 and pixel_loss_weight > 0
