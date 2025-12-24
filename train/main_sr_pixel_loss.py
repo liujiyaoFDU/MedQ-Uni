@@ -730,7 +730,8 @@ def main():
     )
 
     # VAE integration based on freeze_vae
-    if training_args.visual_gen and not training_args.freeze_vae:
+    # When pixel_loss_weight > 0, integrate VAE even if frozen (for decoder access)
+    if training_args.visual_gen and (not training_args.freeze_vae or training_args.pixel_loss_weight > 0):
         model = Bagel(
             language_model,
             vit_model if training_args.visual_und else None,
@@ -738,7 +739,10 @@ def main():
             vae_model=vae_model
         )
         vae_model = None
-        logger.info("VAE integrated into Bagel model for training")
+        if training_args.freeze_vae:
+            logger.info("VAE integrated into Bagel model (frozen) for pixel loss computation")
+        else:
+            logger.info("VAE integrated into Bagel model for training")
     else:
         model = Bagel(
             language_model,
