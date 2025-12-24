@@ -421,7 +421,7 @@ class TrainingArguments:
 
     pixel_loss_paired_only: bool = field(
         default=True,
-        metadata={"help": "Apply pixel loss only for samples that contain both conditioning and target images."}
+        metadata={"help": "Deprecated (ignored): kept for backward compatibility."}
     )
 
     ce_weight: float = field(
@@ -538,48 +538,37 @@ def main():
     logger.info(f'Model arguments {model_args}')
     logger.info(f'Data arguments {data_args}')
 
-    # Prepare auto resume logic
-    
-    # First, try to find the latest checkpoint for auto-resume
-    latest_checkpoint = None
+    # Prepare resume logic (explicit resume takes priority; auto-resume is a fallback only)
     is_resuming_from_interruption = False
-    
-    if training_args.auto_resume:
+    resume_from = training_args.resume_from
+    resume_model_only = training_args.resume_model_only
+    finetune_from_ema = False
+
+    if resume_from is not None:
+        # Explicit user-provided checkpoint → treat as a new experiment starting from that weight
+        finetune_from_ema = training_args.finetune_from_ema
+        if resume_model_only:
+            mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
+        else:
+            mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
+        logger.info(f"📋 Resume mode: {mode}")
+        logger.info(f"   → Loading from: {resume_from}")
+    elif training_args.auto_resume:
+        # No explicit resume → try auto resume (true interruption recovery)
         latest_checkpoint = get_latest_ckpt(training_args.checkpoint_dir)
         if latest_checkpoint is not None:
             is_resuming_from_interruption = True
+            resume_from = latest_checkpoint
+            finetune_from_ema = False  # keep optimizer/scheduler
             logger.info(f"🔄 Auto-resume: Found checkpoint {latest_checkpoint}")
+            logger.info("📋 Resume mode: CONTINUE TRAINING (from interruption)")
+            logger.info("   → Loading full training state (model + optimizer + scheduler)")
+            logger.info("   → finetune_from_ema automatically disabled")
         else:
             logger.info(f"🆕 Auto-resume: No checkpoint found in {training_args.checkpoint_dir}")
-    
-    # Determine the actual resume configuration based on the scenario
-    if is_resuming_from_interruption:
-        # SCENARIO 1: Resuming from interruption (checkpoint_dir has content)
-        # In this case, we want full training state recovery
-        resume_from = latest_checkpoint
-        resume_model_only = training_args.resume_model_only   
-        finetune_from_ema = False  
-        logger.info("📋 Resume mode: CONTINUE TRAINING (from interruption)")
-        logger.info("   → Loading full training state (model + optimizer + scheduler)")
-        logger.info("   → finetune_from_ema automatically disabled")
-        
-    else:
-        # SCENARIO 2: Starting new training (possibly from pretrained model)
-        resume_from = training_args.resume_from
-        resume_model_only = training_args.resume_model_only
-
-        if resume_from is not None:
-            finetune_from_ema = training_args.finetune_from_ema
-
-            if resume_model_only:
-                mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
-            else:
-                mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
-            logger.info(f"📋 Resume mode: {mode}")
-            logger.info(f"   → Loading from: {resume_from}")
-        else:
-            finetune_from_ema = False
             logger.info("📋 Resume mode: FRESH START")
+    else:
+        logger.info("📋 Resume mode: FRESH START")
 
     # Validate checkpoint resume configuration
     if finetune_from_ema and (resume_from is None or not os.path.exists(resume_from)):
@@ -1105,7 +1094,8 @@ def main():
         # Keep original images only when we need pixel-space loss; otherwise drop to save memory.
 
         # Data debug: check if padded_images exists
-        if training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
+        pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+        if pixel_loss_debug and training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
             import logging
             logger = logging.getLogger(__name__)
             logger.info(f"[Data Check Step {curr_step}] 'padded_images' in data: {'padded_images' in data}")

@@ -121,16 +121,14 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
 # 模型路径配置 / Model path configuration
-# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
-
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
 
 # 配置文件路径 / Config file path
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
 
 # 训练参数配置 ） / Training parameters
-TOTAL_STEPS=2001         # 总训练步数 / Total training steps
-SAVE_EVERY=500           
+TOTAL_STEPS=10000         # 总训练步数 / Total training steps
+SAVE_EVERY=2000           
 LOG_EVERY=1              # 每步记录日志 / Log every step
 
 # 学习率配置 / Learning rate configuration
@@ -151,7 +149,7 @@ EMA_DECAY=0.995          # 指数移动平均衰减率 / Exponential moving aver
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1}"  # 实验名称 / Experiment name
+EXP_NAME="${1:-stage1_medq_2nodes_unif_combined_eyeQ_v1}"  # 实验名称 / Experiment name
 NUM_GPUS="${2:-8}"                     # GPU数量 / Number of GPUs per node
 MASTER_PORT="${3:-23456}"              # 主节点端口 / Master port
 
@@ -282,7 +280,7 @@ torchrun \
   --checkpoint_dir "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/${EXP_NAME}" \
   --model_path "${MODEL_PATH}" \
   --resume_from  "${MODEL_PATH}" \
-  --resume_model_only True \
+  --resume_model_only False \
   --resume_model_optimizer False \
   --finetune_from_hf True \
   --finetune_from_ema False \
