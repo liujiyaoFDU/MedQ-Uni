@@ -6,6 +6,7 @@
 # Modifications: Added intermediate layer extraction capabilities.
 
 import copy
+import os
 from typing import List, Tuple, Optional
 
 import torch
@@ -363,7 +364,8 @@ class Bagel(PreTrainedModel):
             # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
 
             # ========== Pixel Loss Entry Diagnostics ==========
-            if self.training and pixel_loss_weight > 0:
+            pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+            if pixel_loss_debug and self.training and pixel_loss_weight > 0:
                 import logging
                 import torch.distributed as dist
                 logger = logging.getLogger(__name__)
@@ -403,7 +405,7 @@ class Bagel(PreTrainedModel):
                     packed_latent_hat0 = packed_latent_clean.clone()
                     packed_latent_hat0[has_mse] = zhat0_tokens
 
-                    # Compute per-image timestep (constant within an image) and map each image to its sample id.
+	                    # Compute per-image timestep (constant within an image).
                     tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]
                     total_tokens_expected = sum(tokens_per_image)
                     if total_tokens_expected == packed_latent_hat0.shape[0]:
@@ -414,42 +416,13 @@ class Bagel(PreTrainedModel):
                             dim=0,
                         )
 
-                        # packed_vae_token_indexes are absolute positions in the packed sequence; use them to infer sample ids.
-                        cum_sample_lens = torch.tensor(sample_lens, device=device, dtype=torch.long).cumsum(0)
-                        first_seq_pos = packed_vae_token_indexes[image_start_ptrs]
-                        image_sample_ids = torch.bucketize(first_seq_pos, cum_sample_lens, right=False)
-
                         # First timestep per image.
                         t_img = packed_timesteps[image_start_ptrs].to(packed_latent_clean.dtype)
 
-                        # Identify "paired" samples: at least one conditioning image (t==0) and one target image (t>0).
-                        # This avoids applying pixel regression to pure T2I samples.
-                        num_samples = len(sample_lens)
-                        if num_samples > 0:
-                            cond_counts = torch.zeros(num_samples, device=device, dtype=torch.long)
-                            tgt_counts = torch.zeros(num_samples, device=device, dtype=torch.long)
-                            cond_counts.scatter_add_(0, image_sample_ids, (t_img <= 0).long())
-                            tgt_counts.scatter_add_(0, image_sample_ids, (t_img > 0).long())
-                            sample_is_paired = (cond_counts > 0) & (tgt_counts > 0)
-
-                            # 添加调试日志（只在第一个进程打印，避免日志过多）
-                            import torch.distributed as dist
-                            if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:  # 1% 概率打印
-                                import logging
-                                logger = logging.getLogger(__name__)
-                                logger.info(f"[Pixel Loss Debug] Total samples: {num_samples}")
-                                logger.info(f"[Pixel Loss Debug] Total images: {len(t_img)}")
-                                logger.info(f"[Pixel Loss Debug] Cond images (t<=0): {(t_img <= 0).sum().item()}")
-                                logger.info(f"[Pixel Loss Debug] Target images (t>0): {(t_img > 0).sum().item()}")
-                                logger.info(f"[Pixel Loss Debug] Paired samples: {sample_is_paired.sum().item()}")
-                                logger.info(f"[Pixel Loss Debug] t_img stats: min={t_img.min().item():.4f}, max={t_img.max().item():.4f}, mean={t_img.mean().item():.4f}")
-                                logger.info(f"[Pixel Loss Debug] pixel_loss_max_t: {pixel_loss_max_t}")
-                        else:
-                            sample_is_paired = torch.zeros(0, device=device, dtype=torch.bool)
-
+                        # Target images are those with t>0 (conditioning images use t=0 via -inf sentinel).
+                        # NOTE: paired-sample detection is intentionally omitted here; enable pixel loss only
+                        # when the training data is guaranteed to be paired.
                         image_is_target = t_img > 0
-                        if pixel_loss_paired_only:
-                            image_is_target = image_is_target & sample_is_paired[image_sample_ids]
 
                         # Weight only low-noise steps (high SNR): linear ramp w(t) = max(0, (t_max - t)/t_max).
                         w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)
@@ -461,15 +434,23 @@ class Bagel(PreTrainedModel):
 
                         selected = w_img > 0
 
-                        # 添加权重统计日志
-                        import torch.distributed as dist
-                        if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:
+                        # Debug summary (rank 0 only).
+                        if pixel_loss_debug:
                             import logging
+                            import torch.distributed as dist
                             logger = logging.getLogger(__name__)
-                            logger.info(f"[Pixel Loss Debug] Images after paired filter: {image_is_target.sum().item()}")
-                            logger.info(f"[Pixel Loss Debug] Images with w>0: {selected.sum().item()}")
-                            if selected.sum() > 0:
-                                logger.info(f"[Pixel Loss Debug] w_img stats: min={w_img[selected].min().item():.4f}, max={w_img[selected].max().item():.4f}, mean={w_img[selected].mean().item():.4f}")
+                            if dist.get_rank() == 0:
+                                logger.info(
+                                    f"[Pixel Loss Debug] images={len(t_img)} target={int(image_is_target.sum().item())} "
+                                    f"selected(w>0)={int(selected.sum().item())} "
+                                    f"t_img(min/mean/max)={t_img.min().item():.4f}/{t_img.mean().item():.4f}/{t_img.max().item():.4f}"
+                                )
+                                if bool(selected.any().item()):
+                                    logger.info(
+                                        f"[Pixel Loss Debug] w_img(min/mean/max)={w_img[selected].min().item():.4f}/"
+                                        f"{w_img[selected].mean().item():.4f}/{w_img[selected].max().item():.4f} "
+                                        f"pixel_loss_max_t={float(pixel_loss_max_t):.4f}"
+                                    )
 
                         if bool(selected.any().item()):
                             p = self.latent_patch_size
@@ -518,12 +499,17 @@ class Bagel(PreTrainedModel):
                                 x_pred = x_pred[:, :, :max_h_img, :max_w_img]
                                 gt_batch = gt_batch.to(x_pred.dtype)
 
-                                if pixel_loss_type.lower() in {"l2", "mse"}:
-                                    diff = (x_pred - gt_batch) ** 2
-                                else:
-                                    diff = (x_pred - gt_batch).abs()
+                                # Compute loss in [0,1] pixel space (consistent with inference saving path),
+                                # which avoids extreme out-of-range decoder outputs exploding L2.
+                                x_pred_01 = (x_pred * 0.5 + 0.5).clamp(0, 1)
+                                gt_batch_01 = (gt_batch * 0.5 + 0.5).clamp(0, 1)
 
-                                denom = mask.sum() * x_pred.shape[1]
+                                if pixel_loss_type.lower() in {"l2", "mse"}:
+                                    diff = (x_pred_01 - gt_batch_01) ** 2
+                                else:
+                                    diff = (x_pred_01 - gt_batch_01).abs()
+
+                                denom = mask.sum() * x_pred_01.shape[1]
                                 if float(denom.item()) > 0:
                                     pixel = (diff * mask).sum() / denom
 

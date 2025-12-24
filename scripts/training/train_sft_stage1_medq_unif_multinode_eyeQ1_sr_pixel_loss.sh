@@ -69,10 +69,10 @@ CE_WEIGHT=0.25
 MSE_WEIGHT=1.0
 
 # Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
-# NOTE: The loss is gated internally to only apply on paired restoration samples and low-noise timesteps.
+# NOTE: The loss is gated internally to apply only on low-noise timesteps.
 PIXEL_LOSS_WEIGHT=0.05
 PIXEL_LOSS_TYPE="l2"
-PIXEL_LOSS_MAX_T=1.0  # 增加到 1.0，覆盖几乎所有时间步
+PIXEL_LOSS_MAX_T=0.3  # 越大越吃显存；建议从 0.3/0.5 起试
 
 EMA_DECAY=0.995
 
@@ -217,7 +217,6 @@ torchrun \
   --pixel_loss_weight "${PIXEL_LOSS_WEIGHT}" \
   --pixel_loss_type "${PIXEL_LOSS_TYPE}" \
   --pixel_loss_max_t "${PIXEL_LOSS_MAX_T}" \
-  --pixel_loss_paired_only false \
   --freeze_llm False \
   --freeze_vit True \
   --freeze_vae True \
@@ -252,4 +251,3 @@ if [[ "${RUNNING_ON_H_CLUSTER}" == true ]]; then
     echo "[INFO] Node ${ACTUAL_NODE_RANK}/${ACTUAL_NNODES} finished"
 fi
 echo "============================================================================"
-

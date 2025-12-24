@@ -421,7 +421,7 @@ class TrainingArguments:
 
     pixel_loss_paired_only: bool = field(
         default=True,
-        metadata={"help": "Apply pixel loss only for samples that contain both conditioning and target images."}
+        metadata={"help": "Deprecated (ignored): kept for backward compatibility."}
     )
 
     ce_weight: float = field(
@@ -1094,7 +1094,8 @@ def main():
         # Keep original images only when we need pixel-space loss; otherwise drop to save memory.
 
         # Data debug: check if padded_images exists
-        if training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
+        pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+        if pixel_loss_debug and training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
             import logging
             logger = logging.getLogger(__name__)
             logger.info(f"[Data Check Step {curr_step}] 'padded_images' in data: {'padded_images' in data}")
