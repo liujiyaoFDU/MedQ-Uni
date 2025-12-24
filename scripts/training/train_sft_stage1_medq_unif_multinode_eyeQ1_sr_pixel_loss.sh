@@ -72,7 +72,7 @@ MSE_WEIGHT=1.0
 # NOTE: The loss is gated internally to only apply on paired restoration samples and low-noise timesteps.
 PIXEL_LOSS_WEIGHT=0.05
 PIXEL_LOSS_TYPE="l2"
-PIXEL_LOSS_MAX_T=0.3
+PIXEL_LOSS_MAX_T=0.5  # 增加到 0.5，覆盖更多时间步
 
 EMA_DECAY=0.995
 

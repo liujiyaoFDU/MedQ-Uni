@@ -410,6 +410,18 @@ class Bagel(PreTrainedModel):
                             cond_counts.scatter_add_(0, image_sample_ids, (t_img <= 0).long())
                             tgt_counts.scatter_add_(0, image_sample_ids, (t_img > 0).long())
                             sample_is_paired = (cond_counts > 0) & (tgt_counts > 0)
+
+                            # 添加调试日志（只在第一个进程打印，避免日志过多）
+                            if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:  # 1% 概率打印
+                                import logging
+                                logger = logging.getLogger(__name__)
+                                logger.info(f"[Pixel Loss Debug] Total samples: {num_samples}")
+                                logger.info(f"[Pixel Loss Debug] Total images: {len(t_img)}")
+                                logger.info(f"[Pixel Loss Debug] Cond images (t<=0): {(t_img <= 0).sum().item()}")
+                                logger.info(f"[Pixel Loss Debug] Target images (t>0): {(t_img > 0).sum().item()}")
+                                logger.info(f"[Pixel Loss Debug] Paired samples: {sample_is_paired.sum().item()}")
+                                logger.info(f"[Pixel Loss Debug] t_img stats: min={t_img.min().item():.4f}, max={t_img.max().item():.4f}, mean={t_img.mean().item():.4f}")
+                                logger.info(f"[Pixel Loss Debug] pixel_loss_max_t: {pixel_loss_max_t}")
                         else:
                             sample_is_paired = torch.zeros(0, device=device, dtype=torch.bool)
 
@@ -426,6 +438,16 @@ class Bagel(PreTrainedModel):
                         )
 
                         selected = w_img > 0
+
+                        # 添加权重统计日志
+                        if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.info(f"[Pixel Loss Debug] Images after paired filter: {image_is_target.sum().item()}")
+                            logger.info(f"[Pixel Loss Debug] Images with w>0: {selected.sum().item()}")
+                            if selected.sum() > 0:
+                                logger.info(f"[Pixel Loss Debug] w_img stats: min={w_img[selected].min().item():.4f}, max={w_img[selected].max().item():.4f}, mean={w_img[selected].mean().item():.4f}")
+
                         if bool(selected.any().item()):
                             p = self.latent_patch_size
                             c = self.latent_channel
