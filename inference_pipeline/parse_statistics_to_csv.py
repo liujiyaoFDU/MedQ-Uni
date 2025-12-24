@@ -27,10 +27,10 @@ import pandas as pd
 # Default input directories to search (used if --directories is not specified)
 # Modify these paths according to your project structure
 DEFAULT_INPUT_DIRECTORIES = [
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/results/stage1_test_50_ver1/stage1_medq_2nodes_unif_combined_v1_4000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/results/stage1_test_50_ver1/stage1_medq_2nodes_unif_combined_v1_8000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/results/stage1_test_50_ver1/stage1_medq_2nodes_unif_combined_v1_12000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/results/stage1_test_50_ver1/stage1_medq_2nodes_unif_combined_v1_16000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_all_eye_ver1/stage1_medq_2nodes_unif_combined_eyeQ_v1_0000500",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_all_eye_ver1/stage1_medq_2nodes_unif_combined_eyeQ_v1_0001000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_all_eye_ver1/stage1_medq_2nodes_unif_combined_eyeQ_v1_0001500",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_all_eye_ver1/stage1_medq_2nodes_unif_combined_eyeQ_v1_0002000"
 ]
 
 
@@ -295,13 +295,18 @@ def generate_column_names(max_tasks: int) -> List[str]:
     # Start with base columns
     columns = list(DEFAULT_BASE_COLUMNS)
 
-    # Add task columns dynamically based on max_tasks
-    for i in range(1, max_tasks + 1):
+    # Add task1 columns first (if max_tasks >= 1)
+    if max_tasks >= 1:
+        for suffix in DEFAULT_TASK_COLUMN_SUFFIXES:
+            columns.append(f'task1_{suffix}')
+
+        # Add timestamp immediately after task1
+        columns.append(JSON_FIELD_TIMESTAMP)
+
+    # Add remaining task columns (task2 onwards)
+    for i in range(2, max_tasks + 1):
         for suffix in DEFAULT_TASK_COLUMN_SUFFIXES:
             columns.append(f'task{i}_{suffix}')
-
-    # Add timestamp at the end
-    columns.append(JSON_FIELD_TIMESTAMP)
 
     return columns
 

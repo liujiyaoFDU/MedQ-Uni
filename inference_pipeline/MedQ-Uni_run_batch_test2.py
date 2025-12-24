@@ -479,7 +479,43 @@ class BatchTester:
                     gt_image = background
                 else:
                     gt_image = gt_image.convert('RGB')
-            
+
+            # 检查并修正图像尺寸 - 确保不小于最小边要求
+            # 从配置中获取最小边要求
+            vae_min_size = self.generator.config.get('vae_transform_size', (2048, 128, 16))[1]  # 128
+            vit_min_size = self.generator.config.get('vit_transform_size', (518, 224, 14))[1]    # 224
+            min_required_size = max(vae_min_size, vit_min_size)  # 取较大值作为最小边要求
+
+            original_width, original_height = input_image.size
+            min_current_size = min(original_width, original_height)
+
+            if min_current_size < min_required_size:
+                # 图像的最小边小于要求，需要resize
+                scale_factor = min_required_size / min_current_size
+                new_width = int(original_width * scale_factor)
+                new_height = int(original_height * scale_factor)
+
+                print(f"Warning [Sample {sample_id}]: Input image size ({original_width}x{original_height}) "
+                      f"has a dimension smaller than minimum required size ({min_required_size}). "
+                      f"Resizing to ({new_width}x{new_height}) to meet minimum requirements.")
+
+                input_image = input_image.resize((new_width, new_height), Image.BICUBIC)
+
+                # 同样处理GT图像
+                gt_original_width, gt_original_height = gt_image.size
+                gt_min_current_size = min(gt_original_width, gt_original_height)
+
+                if gt_min_current_size < min_required_size:
+                    gt_scale_factor = min_required_size / gt_min_current_size
+                    gt_new_width = int(gt_original_width * gt_scale_factor)
+                    gt_new_height = int(gt_original_height * gt_scale_factor)
+
+                    print(f"Warning [Sample {sample_id}]: GT image size ({gt_original_width}x{gt_original_height}) "
+                          f"has a dimension smaller than minimum required size ({min_required_size}). "
+                          f"Resizing to ({gt_new_width}x{gt_new_height}) to meet minimum requirements.")
+
+                    gt_image = gt_image.resize((gt_new_width, gt_new_height), Image.BICUBIC)
+
             # 提取指令（移除 <image> 标记）
             instruction = self.extract_instruction(sample['message'])
             
@@ -615,7 +651,7 @@ class BatchTester:
             # Align with `configs/train_ixi_t1_medq_ver1.yaml`
             # VAE: max=1024, min=512, stride=16
             # ViT: max=518,  min=224, stride=14
-            "vae_transform_size": (1024, 256, 16),
+            "vae_transform_size": (2048, 128, 16),
             "vit_transform_size": (518, 224, 14),
             "text_do_sample": self.args.text_do_sample,
             "text_temperature": self.args.text_temperature,
