@@ -365,6 +365,7 @@ class Bagel(PreTrainedModel):
             # ========== Pixel Loss Entry Diagnostics ==========
             if self.training and pixel_loss_weight > 0:
                 import logging
+                import torch.distributed as dist
                 logger = logging.getLogger(__name__)
                 if dist.get_rank() == 0:
                     logger.info("="*60)
@@ -432,6 +433,7 @@ class Bagel(PreTrainedModel):
                             sample_is_paired = (cond_counts > 0) & (tgt_counts > 0)
 
                             # 添加调试日志（只在第一个进程打印，避免日志过多）
+                            import torch.distributed as dist
                             if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:  # 1% 概率打印
                                 import logging
                                 logger = logging.getLogger(__name__)
@@ -460,6 +462,7 @@ class Bagel(PreTrainedModel):
                         selected = w_img > 0
 
                         # 添加权重统计日志
+                        import torch.distributed as dist
                         if dist.get_rank() == 0 and torch.rand(1).item() < 0.01:
                             import logging
                             logger = logging.getLogger(__name__)
