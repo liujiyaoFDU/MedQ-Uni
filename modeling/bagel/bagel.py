@@ -168,12 +168,17 @@ class Bagel(PreTrainedModel):
         packed_vit_position_ids: Optional[torch.LongTensor] = None,
         vit_token_seqlens: Optional[torch.IntTensor] = None,
         # for visual generation
+        padded_images: Optional[torch.Tensor] = None,
         padded_latent: Optional[torch.Tensor] = None,
         patchified_vae_latent_shapes: Optional[List[Tuple[int, int]]] = None,
         packed_latent_position_ids: Optional[torch.LongTensor] = None,
         packed_vae_token_indexes: Optional[torch.LongTensor] = None,
         packed_timesteps: Optional[torch.LongTensor] = None,
         mse_loss_indexes: Optional[torch.BoolTensor] = None,
+        pixel_loss_weight: float = 0.0,
+        pixel_loss_type: str = "l1",
+        pixel_loss_max_t: float = 0.0,
+        pixel_loss_paired_only: bool = True,
         extract_diffusion_features: bool = False,
         align_only: bool = False,
     ) -> torch.Tensor:
@@ -347,11 +352,135 @@ class Bagel(PreTrainedModel):
             return result
 
         mse = None
+        pixel = None
         if self.config.visual_gen:
             packed_mse_preds = self.llm2vae(last_hidden_state[mse_loss_indexes])
             target = noise - packed_latent_clean
             has_mse = packed_timesteps > 0
             mse = (packed_mse_preds - target[has_mse]) ** 2
+
+            # Optional pixel-space fidelity loss (for paired restoration tasks such as SR/denoise).
+            # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
+            if (
+                self.training
+                and pixel_loss_weight > 0
+                and pixel_loss_max_t > 0
+                and padded_images is not None
+                and self.vae_model is not None
+                and patchified_vae_latent_shapes is not None
+                and packed_vae_token_indexes is not None
+                and packed_timesteps is not None
+                and len(patchified_vae_latent_shapes) > 0
+            ):
+                # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
+                if packed_mse_preds.shape[0] == int(has_mse.sum().item()):
+                    # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
+                    # Here v̂ ≈ (ε - z0) is the rectified-flow "velocity" target.
+                    t_tokens = packed_timesteps[has_mse].to(packed_latent_clean.dtype)
+                    zhat0_tokens = packed_latent_clean[has_mse] + t_tokens[:, None] * (target[has_mse] - packed_mse_preds)
+
+                    packed_latent_hat0 = packed_latent_clean.clone()
+                    packed_latent_hat0[has_mse] = zhat0_tokens
+
+                    # Compute per-image timestep (constant within an image) and map each image to its sample id.
+                    tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]
+                    total_tokens_expected = sum(tokens_per_image)
+                    if total_tokens_expected == packed_latent_hat0.shape[0]:
+                        device = packed_latent_hat0.device
+                        tokens_per_image_t = torch.tensor(tokens_per_image, device=device, dtype=torch.long)
+                        image_start_ptrs = torch.cat(
+                            [torch.zeros(1, device=device, dtype=torch.long), tokens_per_image_t.cumsum(0)[:-1]],
+                            dim=0,
+                        )
+
+                        # packed_vae_token_indexes are absolute positions in the packed sequence; use them to infer sample ids.
+                        cum_sample_lens = torch.tensor(sample_lens, device=device, dtype=torch.long).cumsum(0)
+                        first_seq_pos = packed_vae_token_indexes[image_start_ptrs]
+                        image_sample_ids = torch.bucketize(first_seq_pos, cum_sample_lens, right=False)
+
+                        # First timestep per image.
+                        t_img = packed_timesteps[image_start_ptrs].to(packed_latent_clean.dtype)
+
+                        # Identify "paired" samples: at least one conditioning image (t==0) and one target image (t>0).
+                        # This avoids applying pixel regression to pure T2I samples.
+                        num_samples = len(sample_lens)
+                        if num_samples > 0:
+                            cond_counts = torch.zeros(num_samples, device=device, dtype=torch.long)
+                            tgt_counts = torch.zeros(num_samples, device=device, dtype=torch.long)
+                            cond_counts.scatter_add_(0, image_sample_ids, (t_img <= 0).long())
+                            tgt_counts.scatter_add_(0, image_sample_ids, (t_img > 0).long())
+                            sample_is_paired = (cond_counts > 0) & (tgt_counts > 0)
+                        else:
+                            sample_is_paired = torch.zeros(0, device=device, dtype=torch.bool)
+
+                        image_is_target = t_img > 0
+                        if pixel_loss_paired_only:
+                            image_is_target = image_is_target & sample_is_paired[image_sample_ids]
+
+                        # Weight only low-noise steps (high SNR): linear ramp w(t) = max(0, (t_max - t)/t_max).
+                        w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)
+                        w_img[image_is_target] = torch.clamp(
+                            (float(pixel_loss_max_t) - t_img[image_is_target]) / float(pixel_loss_max_t),
+                            min=0.0,
+                            max=1.0,
+                        )
+
+                        selected = w_img > 0
+                        if bool(selected.any().item()):
+                            p = self.latent_patch_size
+                            c = self.latent_channel
+                            vae_downsample = self.latent_downsample // p
+
+                            # Collect predicted latents + GT images for selected images (variable sizes).
+                            pred_latents = []
+                            gt_images = []
+                            weights = []
+
+                            token_ptr = 0
+                            for img_idx, (h, w) in enumerate(patchified_vae_latent_shapes):
+                                num_img_tokens = h * w
+                                if bool(selected[img_idx].item()):
+                                    tok = packed_latent_hat0[token_ptr : token_ptr + num_img_tokens]
+                                    tok = tok.view(h, w, p, p, c)
+                                    latent = torch.einsum("hwpqc->chpwq", tok).reshape(c, h * p, w * p)
+                                    pred_latents.append(latent)
+
+                                    H_img = h * self.latent_downsample
+                                    W_img = w * self.latent_downsample
+                                    gt_images.append(padded_images[img_idx, :, :H_img, :W_img])
+                                    weights.append(w_img[img_idx])
+                                token_ptr += num_img_tokens
+
+                            if len(pred_latents) > 0:
+                                # Pad latents/images to the max size for a single batched decode.
+                                max_h_lat = max(z.shape[1] for z in pred_latents)
+                                max_w_lat = max(z.shape[2] for z in pred_latents)
+                                max_h_img = max_h_lat * vae_downsample
+                                max_w_img = max_w_lat * vae_downsample
+
+                                latent_batch = packed_latent_hat0.new_zeros((len(pred_latents), c, max_h_lat, max_w_lat))
+                                gt_batch = padded_images.new_zeros((len(gt_images), padded_images.shape[1], max_h_img, max_w_img))
+                                mask = padded_images.new_zeros((len(gt_images), 1, max_h_img, max_w_img))
+
+                                for i, (z, x_gt, w_i) in enumerate(zip(pred_latents, gt_images, weights)):
+                                    H_lat, W_lat = z.shape[1], z.shape[2]
+                                    H_img, W_img = x_gt.shape[1], x_gt.shape[2]
+                                    latent_batch[i, :, :H_lat, :W_lat] = z
+                                    gt_batch[i, :, :H_img, :W_img] = x_gt
+                                    mask[i, :, :H_img, :W_img] = w_i.to(mask.dtype)
+
+                                x_pred = self.vae_decode(latent_batch)
+                                x_pred = x_pred[:, :, :max_h_img, :max_w_img]
+                                gt_batch = gt_batch.to(x_pred.dtype)
+
+                                if pixel_loss_type.lower() in {"l2", "mse"}:
+                                    diff = (x_pred - gt_batch) ** 2
+                                else:
+                                    diff = (x_pred - gt_batch).abs()
+
+                                denom = mask.sum() * x_pred.shape[1]
+                                if float(denom.item()) > 0:
+                                    pixel = (diff * mask).sum() / denom
 
 
         ce = None
@@ -359,7 +488,7 @@ class Bagel(PreTrainedModel):
             packed_ce_preds = self.language_model.lm_head(last_hidden_state[ce_loss_indexes])
             ce = F.cross_entropy(packed_ce_preds, packed_label_ids, reduction="none")
 
-        result = dict(mse=mse, ce=ce)
+        result = dict(mse=mse, ce=ce, pixel=pixel)
         if diffusion_features is not None:
             result['diffusion_features'] = diffusion_features
 
