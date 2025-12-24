@@ -1107,10 +1107,15 @@ class FSDPCheckpoint:
         if hasattr(model, 'language_model'):
             expected_components.append('language_model')
         
+        # Filter kwargs to only include parameters accepted by fsdp_save_ckpt
+        # Remove tensorboard-related parameters that are not part of the signature
+        allowed_kwargs = {k: v for k, v in kwargs.items()
+                         if k in ['tokenizer', 'vae_model', 'model_args', 'data_args', 'training_args']}
+
         # Call original save function (pass directory path)
         FSDPCheckpoint.fsdp_save_ckpt(
-            ckpt_dir, train_steps, model, ema_model, 
-            optimizer, scheduler, data_status, logger, fsdp_config, **kwargs
+            ckpt_dir, train_steps, model, ema_model,
+            optimizer, scheduler, data_status, logger, fsdp_config, **allowed_kwargs
         )
 
         # Validate save results
