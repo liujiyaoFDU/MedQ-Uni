@@ -352,20 +352,25 @@ class Bagel(PreTrainedModel):
             result['mse'] = None
             return result
 
-        mse = None
-        pixel = None
+        mse = None  # 初始化 MSE 损失，若条件不满足则保持为空
+        pixel = None  # 初始化像素损失，若条件不满足则保持为空
         if self.config.visual_gen:
-            packed_mse_preds = self.llm2vae(last_hidden_state[mse_loss_indexes])
-            target = noise - packed_latent_clean
-            has_mse = packed_timesteps > 0
-            mse = (packed_mse_preds - target[has_mse]) ** 2
+            # 局部命名更直观的别名（仅在该区域内使用）
+            z0_tokens_clean = packed_latent_clean  # 干净潜变量 z0（打平 token 序列）
+            noise_tokens = noise  # 对应的噪声 ε（与 z0 同形状）
+            t_tokens_all = packed_timesteps  # 每个 token 的时间步 t
+
+            velocity_pred = self.llm2vae(last_hidden_state[mse_loss_indexes])  # 模型预测的速度 v̂（≈ ε - z0）
+            velocity_target = noise_tokens - z0_tokens_clean  # 真实速度 v = ε - z0
+            supervise_mask = t_tokens_all > 0  # 标记哪些 token (t>0) 需要 MSE 监督
+            mse = (velocity_pred - velocity_target[supervise_mask]) ** 2  # 逐元素平方误差
 
             # Optional pixel-space fidelity loss (for paired restoration tasks such as SR/denoise).
             # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
 
             # ========== Pixel Loss Entry Diagnostics ==========
-            pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
-            if pixel_loss_debug and self.training and pixel_loss_weight > 0:
+            pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}  # 环境变量控制调试输出
+            if pixel_loss_debug and self.training and pixel_loss_weight > 0:  # 仅在训练且权重大于 0 时打印调试信息
                 import logging
                 import torch.distributed as dist
                 logger = logging.getLogger(__name__)
@@ -385,54 +390,54 @@ class Bagel(PreTrainedModel):
             # ===================================================
 
             if (
-                self.training
-                and pixel_loss_weight > 0
-                and pixel_loss_max_t > 0
-                and padded_images is not None
-                and self.vae_model is not None
-                and patchified_vae_latent_shapes is not None
-                and packed_vae_token_indexes is not None
-                and packed_timesteps is not None
-                and len(patchified_vae_latent_shapes) > 0
+                self.training  # 仅训练时计算像素损失
+                and pixel_loss_weight > 0  # 需设置权重
+                and pixel_loss_max_t > 0  # 需有时间步阈值
+                and padded_images is not None  # 需提供原始图像
+                and self.vae_model is not None  # 需有 VAE 解码器
+                and patchified_vae_latent_shapes is not None  # 需有每张图的 patch 形状
+                and packed_vae_token_indexes is not None  # 需有 VAE token 索引
+                and packed_timesteps is not None  # 需有时间步
+                and len(patchified_vae_latent_shapes) > 0  # 至少一张图
             ):
                 # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
-                if packed_mse_preds.shape[0] == int(has_mse.sum().item()):
+                if velocity_pred.shape[0] == int(supervise_mask.sum().item()):  # 确保预测数量与需要计算的 token 数一致
                     # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
                     # Here v̂ ≈ (ε - z0) is the rectified-flow "velocity" target.
-                    t_tokens = packed_timesteps[has_mse].to(packed_latent_clean.dtype)
-                    zhat0_tokens = packed_latent_clean[has_mse] + t_tokens[:, None] * (target[has_mse] - packed_mse_preds)
+                    t_tokens_supervised = t_tokens_all[supervise_mask].to(z0_tokens_clean.dtype)  # 仅取监督位置的时间步
+                    z0_tokens_pred = z0_tokens_clean[supervise_mask] + t_tokens_supervised[:, None] * (velocity_target[supervise_mask] - velocity_pred)  # 用预测速度恢复估计的 z0
 
-                    packed_latent_hat0 = packed_latent_clean.clone()
-                    packed_latent_hat0[has_mse] = zhat0_tokens
+                    z0_tokens_hybrid = z0_tokens_clean.clone()  # 基于预测速度的 z0 估计
+                    z0_tokens_hybrid[supervise_mask] = z0_tokens_pred  # 仅覆盖监督位置
 
-	                    # Compute per-image timestep (constant within an image).
-                    tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]
-                    total_tokens_expected = sum(tokens_per_image)
-                    if total_tokens_expected == packed_latent_hat0.shape[0]:
-                        device = packed_latent_hat0.device
-                        tokens_per_image_t = torch.tensor(tokens_per_image, device=device, dtype=torch.long)
+                    # Compute per-image timestep (constant within an image).
+                    tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]  # 统计每张图的 token 数
+                    total_tokens_expected = sum(tokens_per_image)  # 总 token 数用于校验
+                    if total_tokens_expected == z0_tokens_hybrid.shape[0]:  # 校验 token 总数匹配
+                        device = z0_tokens_hybrid.device
+                        tokens_per_image_t = torch.tensor(tokens_per_image, device=device, dtype=torch.long)  # 构造张量形式
                         image_start_ptrs = torch.cat(
                             [torch.zeros(1, device=device, dtype=torch.long), tokens_per_image_t.cumsum(0)[:-1]],
                             dim=0,
-                        )
+                        )  # 计算每张图的起始偏移
 
                         # First timestep per image.
-                        t_img = packed_timesteps[image_start_ptrs].to(packed_latent_clean.dtype)
+                        t_img = t_tokens_all[image_start_ptrs].to(z0_tokens_clean.dtype)  # 获取每张图的时间步（第一 token）
 
                         # Target images are those with t>0 (conditioning images use t=0 via -inf sentinel).
                         # NOTE: paired-sample detection is intentionally omitted here; enable pixel loss only
                         # when the training data is guaranteed to be paired.
-                        image_is_target = t_img > 0
+                        image_is_target = t_img > 0  # t>0 视为目标图（参与像素损失）
 
                         # Weight only low-noise steps (high SNR): linear ramp w(t) = max(0, (t_max - t)/t_max).
-                        w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)
+                        w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)  # 初始化每图权重
                         w_img[image_is_target] = torch.clamp(
                             (float(pixel_loss_max_t) - t_img[image_is_target]) / float(pixel_loss_max_t),
                             min=0.0,
                             max=1.0,
-                        )
+                        )  # 对目标图按时间步线性衰减
 
-                        selected = w_img > 0
+                        selected = w_img > 0  # 选择权重大于 0 的图
 
                         # Debug summary (rank 0 only).
                         if pixel_loss_debug:
@@ -452,66 +457,90 @@ class Bagel(PreTrainedModel):
                                         f"pixel_loss_max_t={float(pixel_loss_max_t):.4f}"
                                     )
 
-                        if bool(selected.any().item()):
-                            p = self.latent_patch_size
-                            c = self.latent_channel
-                            vae_downsample = self.latent_downsample // p
+                        if bool(selected.any().item()):  # 若有被选中的图，继续计算像素损失
+                            p = self.latent_patch_size  # patch 尺寸
+                            c = self.latent_channel  # 潜通道数
+                            vae_downsample = self.latent_downsample // p  # 解码后下采样系数（考虑 patch）
 
                             # Collect predicted latents + GT images for selected images (variable sizes).
-                            pred_latents = []
-                            gt_images = []
-                            weights = []
+                            pred_latents = []  # 选中图的预测潜特征
+                            gt_images = []  # 选中图的 GT
+                            weights = []  # 选中图的权重
+
+                            if pixel_loss_debug and dist.get_rank() == 0:
+                                selected_idx = torch.nonzero(selected).squeeze(-1).tolist()
+                                logger.info(
+                                    f"[Pixel Loss Debug] selected_idx={selected_idx} "
+                                    f"tokens_per_image={tokens_per_image} "
+                                    f"w_img_selected={[w_img[i].item() for i in selected_idx]}"
+                                )
 
                             token_ptr = 0
-                            for img_idx, (h, w) in enumerate(patchified_vae_latent_shapes):
-                                num_img_tokens = h * w
-                                if bool(selected[img_idx].item()):
-                                    tok = packed_latent_hat0[token_ptr : token_ptr + num_img_tokens]
-                                    tok = tok.view(h, w, p, p, c)
-                                    latent = torch.einsum("hwpqc->chpwq", tok).reshape(c, h * p, w * p)
-                                    pred_latents.append(latent)
+                            for img_idx, (h, w) in enumerate(patchified_vae_latent_shapes):  # 遍历每张图
+                                num_img_tokens = h * w  # 当前图 token 数
+                                if bool(selected[img_idx].item()):  # 若该图被选中
+                                    tok = z0_tokens_hybrid[token_ptr : token_ptr + num_img_tokens]  # 取出对应 token
+                                    tok = tok.view(h, w, p, p, c)  # 还原为 (h, w, p, p, c)
+                                    latent = torch.einsum("hwpqc->chpwq", tok).reshape(c, h * p, w * p)  # 调整维度得到潜特征图
+                                    pred_latents.append(latent)  # 收集预测潜特征
 
-                                    H_img = h * self.latent_downsample
-                                    W_img = w * self.latent_downsample
-                                    gt_images.append(padded_images[img_idx, :, :H_img, :W_img])
-                                    weights.append(w_img[img_idx])
-                                token_ptr += num_img_tokens
+                                    H_img = h * self.latent_downsample  # 还原图像高度
+                                    W_img = w * self.latent_downsample  # 还原图像宽度
+                                    gt_images.append(padded_images[img_idx, :, :H_img, :W_img])  # 截取对应大小的 GT 图
+                                    weights.append(w_img[img_idx])  # 记录权重
 
-                            if len(pred_latents) > 0:
+                                    if pixel_loss_debug and dist.get_rank() == 0:
+                                        logger.info(
+                                            f"[Pixel Loss Debug] img_idx={img_idx} token_ptr={token_ptr} "
+                                            f"tok_shape={tok.shape} latent_shape={latent.shape} "
+                                            f"gt_shape={(H_img, W_img)} "
+                                            f"weight={w_img[img_idx].item():.4f}"
+                                        )
+                                token_ptr += num_img_tokens  # 移动全局 token 指针
+
+                            if len(pred_latents) > 0:  # 若有需要解码的潜特征
                                 # Pad latents/images to the max size for a single batched decode.
-                                max_h_lat = max(z.shape[1] for z in pred_latents)
-                                max_w_lat = max(z.shape[2] for z in pred_latents)
-                                max_h_img = max_h_lat * vae_downsample
-                                max_w_img = max_w_lat * vae_downsample
+                                max_h_lat = max(z.shape[1] for z in pred_latents)  # 最大潜特征高度
+                                max_w_lat = max(z.shape[2] for z in pred_latents)  # 最大潜特征宽度
+                                max_h_img = max_h_lat * vae_downsample  # 对应最大图像高度
+                                max_w_img = max_w_lat * vae_downsample  # 对应最大图像宽度
 
-                                latent_batch = packed_latent_hat0.new_zeros((len(pred_latents), c, max_h_lat, max_w_lat))
-                                gt_batch = padded_images.new_zeros((len(gt_images), padded_images.shape[1], max_h_img, max_w_img))
-                                mask = padded_images.new_zeros((len(gt_images), 1, max_h_img, max_w_img))
+                                latent_batch = z0_tokens_hybrid.new_zeros((len(pred_latents), c, max_h_lat, max_w_lat))  # 构造潜特征批次并零填充
+                                gt_batch = padded_images.new_zeros((len(gt_images), padded_images.shape[1], max_h_img, max_w_img))  # 构造 GT 批次并零填充
+                                mask = padded_images.new_zeros((len(gt_images), 1, max_h_img, max_w_img))  # 同尺寸权重掩码
 
-                                for i, (z, x_gt, w_i) in enumerate(zip(pred_latents, gt_images, weights)):
+                                if pixel_loss_debug and dist.get_rank() == 0:
+                                    logger.info(
+                                        f"[Pixel Loss Debug] batch_shapes latent_batch={latent_batch.shape} "
+                                        f"gt_batch={gt_batch.shape} mask={mask.shape} "
+                                        f"max_h_lat={max_h_lat} max_w_lat={max_w_lat} "
+                                        f"max_h_img={max_h_img} max_w_img={max_w_img}"
+                                    )
+
+                                for i, (z, x_gt, w_i) in enumerate(zip(pred_latents, gt_images, weights)):  # 填充批次
                                     H_lat, W_lat = z.shape[1], z.shape[2]
                                     H_img, W_img = x_gt.shape[1], x_gt.shape[2]
-                                    latent_batch[i, :, :H_lat, :W_lat] = z
-                                    gt_batch[i, :, :H_img, :W_img] = x_gt
-                                    mask[i, :, :H_img, :W_img] = w_i.to(mask.dtype)
+                                    latent_batch[i, :, :H_lat, :W_lat] = z  # 填入潜特征
+                                    gt_batch[i, :, :H_img, :W_img] = x_gt  # 填入 GT 图
+                                    mask[i, :, :H_img, :W_img] = w_i.to(mask.dtype)  # 填入权重掩码
 
-                                x_pred = self.vae_decode(latent_batch)
-                                x_pred = x_pred[:, :, :max_h_img, :max_w_img]
-                                gt_batch = gt_batch.to(x_pred.dtype)
+                                x_pred = self.vae_decode(latent_batch)  # VAE 解码预测图像
+                                x_pred = x_pred[:, :, :max_h_img, :max_w_img]  # 裁剪到填充尺寸
+                                gt_batch = gt_batch.to(x_pred.dtype)  # 对齐数据类型
 
                                 # Compute loss in [0,1] pixel space (consistent with inference saving path),
                                 # which avoids extreme out-of-range decoder outputs exploding L2.
-                                x_pred_01 = (x_pred * 0.5 + 0.5).clamp(0, 1)
-                                gt_batch_01 = (gt_batch * 0.5 + 0.5).clamp(0, 1)
+                                x_pred_01 = (x_pred * 0.5 + 0.5).clamp(0, 1)  # 将预测值映射到 [0,1]
+                                gt_batch_01 = (gt_batch * 0.5 + 0.5).clamp(0, 1)  # 将 GT 映射到 [0,1]
 
-                                if pixel_loss_type.lower() in {"l2", "mse"}:
-                                    diff = (x_pred_01 - gt_batch_01) ** 2
+                                if pixel_loss_type.lower() in {"l2", "mse"}:  # 选择 L2/MSE 或 L1
+                                    diff = (x_pred_01 - gt_batch_01) ** 2  # L2 差
                                 else:
-                                    diff = (x_pred_01 - gt_batch_01).abs()
+                                    diff = (x_pred_01 - gt_batch_01).abs()  # L1 差
 
-                                denom = mask.sum() * x_pred_01.shape[1]
-                                if float(denom.item()) > 0:
-                                    pixel = (diff * mask).sum() / denom
+                                denom = mask.sum() * x_pred_01.shape[1]  # 归一化系数：有效像素数 × 通道数
+                                if float(denom.item()) > 0:  # 防止除零
+                                    pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
 
 
         ce = None
