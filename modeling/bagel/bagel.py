@@ -370,6 +370,7 @@ class Bagel(PreTrainedModel):
 
             # ========== Pixel Loss Entry Diagnostics ==========
             pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}  # 环境变量控制调试输出
+            pixel_loss_debug_verbose = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE", "").lower() in {"1", "true", "yes", "y"}  # 更详细的调试输出（可能较多）
             if pixel_loss_debug and self.training and pixel_loss_weight > 0:  # 仅在训练且权重大于 0 时打印调试信息
                 import logging
                 import torch.distributed as dist
@@ -423,6 +424,43 @@ class Bagel(PreTrainedModel):
 
                         # First timestep per image.
                         t_img = t_tokens_all[image_start_ptrs].to(z0_tokens_clean.dtype)  # 获取每张图的时间步（第一 token）
+
+                        # Optional: verify mapping between (VAE token order) and (sequence positions) + mse mask.
+                        if pixel_loss_debug_verbose:
+                            max_verbose_env = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE_MAX", "5")
+                            try:
+                                max_verbose = int(max_verbose_env)
+                            except Exception:
+                                max_verbose = 5
+                            verbose_reports = int(getattr(self, "_pixel_loss_verbose_reports", 0))
+                            if verbose_reports < max_verbose:
+                                setattr(self, "_pixel_loss_verbose_reports", verbose_reports + 1)
+
+                                vae_seq_pos = packed_vae_token_indexes  # (num_vae_tokens,) 每个 VAE token 在 packed_sequence 中的位置
+                                is_sorted = bool(torch.all(vae_seq_pos[1:] >= vae_seq_pos[:-1]).item()) if vae_seq_pos.numel() > 1 else True
+                                logger.info(
+                                    f"[Pixel Loss Debug] mapping_check rank={int(dist.get_rank())} "
+                                    f"total_vae_tokens={int(vae_seq_pos.numel())} expected={int(total_tokens_expected)} "
+                                    f"vae_seq_pos(min/max)={int(vae_seq_pos.min().item())}/{int(vae_seq_pos.max().item())} "
+                                    f"sorted={is_sorted} "
+                                    f"supervised_tokens={int(supervise_mask.sum().item())} "
+                                    f"mse_loss_indexes_sum={int(mse_loss_indexes.sum().item()) if mse_loss_indexes is not None else -1}"
+                                )
+                                if mse_loss_indexes is not None:
+                                    mse_seq_pos = torch.nonzero(mse_loss_indexes, as_tuple=False).squeeze(-1)
+                                    expected_mse_seq_pos = vae_seq_pos[supervise_mask]
+                                    same_count = int(mse_seq_pos.numel()) == int(expected_mse_seq_pos.numel())
+                                    if same_count:
+                                        mse_sorted = torch.sort(mse_seq_pos).values
+                                        expected_sorted = torch.sort(expected_mse_seq_pos).values
+                                        same_set = bool(torch.equal(mse_sorted, expected_sorted))
+                                    else:
+                                        same_set = False
+                                    if not same_set and dist.get_rank() == 0:
+                                        logger.warning(
+                                            "[Pixel Loss Debug] mse_loss_indexes does not match expected supervised VAE tokens; "
+                                            "this can indicate sequence packing / mask misalignment."
+                                        )
 
                         # Target images are those with t>0 (conditioning images use t=0 via -inf sentinel).
                         # NOTE: paired-sample detection is intentionally omitted here; enable pixel loss only
@@ -490,11 +528,15 @@ class Bagel(PreTrainedModel):
                                     weights.append(w_img[img_idx])  # 记录权重
 
                                     if pixel_loss_debug and dist.get_rank() == 0:
+                                        seq_slice = packed_vae_token_indexes[token_ptr : token_ptr + num_img_tokens]
+                                        seq_min = int(seq_slice.min().item()) if seq_slice.numel() > 0 else -1
+                                        seq_max = int(seq_slice.max().item()) if seq_slice.numel() > 0 else -1
                                         logger.info(
                                             f"[Pixel Loss Debug] img_idx={img_idx} token_ptr={token_ptr} "
                                             f"tok_shape={tok.shape} latent_shape={latent.shape} "
                                             f"gt_shape={(H_img, W_img)} "
-                                            f"weight={w_img[img_idx].item():.4f}"
+                                            f"weight={w_img[img_idx].item():.4f} "
+                                            f"vae_seq_pos(min/max)={seq_min}/{seq_max}"
                                         )
                                 token_ptr += num_img_tokens  # 移动全局 token 指针
 
@@ -530,6 +572,7 @@ class Bagel(PreTrainedModel):
 
                                 # Compute loss in [0,1] pixel space (consistent with inference saving path),
                                 # which avoids extreme out-of-range decoder outputs exploding L2.
+                                # NOTE: clamp 不会修复 NaN；若出现 NaN/Inf 需要额外诊断。
                                 x_pred_01 = (x_pred * 0.5 + 0.5).clamp(0, 1)  # 将预测值映射到 [0,1]
                                 gt_batch_01 = (gt_batch * 0.5 + 0.5).clamp(0, 1)  # 将 GT 映射到 [0,1]
 
@@ -541,6 +584,64 @@ class Bagel(PreTrainedModel):
                                 denom = mask.sum() * x_pred_01.shape[1]  # 归一化系数：有效像素数 × 通道数
                                 if float(denom.item()) > 0:  # 防止除零
                                     pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
+
+                                    # === Abnormal value diagnostics ===
+                                    # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
+                                    # 若出现巨大的 pixel（例如 1e11），说明存在 NaN/Inf、dtype/广播异常或 mask/denom 异常。
+                                    # 异常情况可能只发生在某个 rank 的某个样本上，因此这里不要只限制 rank0，
+                                    # 否则分布式训练时会“看不到”非 rank0 上的爆炸根因。
+                                    if pixel_loss_debug:
+                                        pixel_scalar = float(pixel.detach().float().item())
+                                        if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
+                                            max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
+                                            try:
+                                                max_reports = int(max_reports_env)
+                                            except Exception:
+                                                max_reports = 10
+                                            reported = int(getattr(self, "_pixel_loss_abnormal_reports", 0))
+                                            if reported >= max_reports:
+                                                # 避免日志刷屏：超过次数后不再打印详细统计
+                                                pass
+                                            else:
+                                                setattr(self, "_pixel_loss_abnormal_reports", reported + 1)
+
+                                            def _stat(t: torch.Tensor):
+                                                t_f = t.detach().float()
+                                                return (
+                                                    f"shape={tuple(t.shape)} dtype={t.dtype} "
+                                                    f"finite={bool(torch.isfinite(t_f).all().item())} "
+                                                    f"min={float(t_f.min().item()):.6g} "
+                                                    f"mean={float(t_f.mean().item()):.6g} "
+                                                    f"max={float(t_f.max().item()):.6g}"
+                                                )
+
+                                            if reported < max_reports:
+                                                logger.warning("=" * 80)
+                                                logger.warning("[Pixel Loss Abnormal] pixel value out of expected range")
+                                                logger.warning(f"  rank={int(dist.get_rank())}")
+                                                logger.warning(f"  pixel={pixel_scalar:.6g} pixel_loss_type={pixel_loss_type} pixel_loss_max_t={float(pixel_loss_max_t):.6g}")
+                                                logger.warning(f"  denom={float(denom.detach().float().item()):.6g} mask_sum={float(mask.detach().float().sum().item()):.6g} C={int(x_pred_01.shape[1])}")
+                                                logger.warning(
+                                                    f"  token_mapping total_tokens_expected={int(total_tokens_expected)} "
+                                                    f"packed_vae_token_indexes={int(packed_vae_token_indexes.numel())} "
+                                                    f"tokens_per_image_sum={int(sum(tokens_per_image))} images={len(tokens_per_image)}"
+                                                )
+                                                logger.warning(
+                                                    f"  masks supervised_tokens={int(supervise_mask.sum().item())} "
+                                                    f"mse_loss_indexes_sum={int(mse_loss_indexes.sum().item()) if mse_loss_indexes is not None else -1}"
+                                                )
+                                                logger.warning(f"  x_pred: {_stat(x_pred)}")
+                                                logger.warning(f"  gt_batch: {_stat(gt_batch)}")
+                                                logger.warning(f"  x_pred_01: {_stat(x_pred_01)}")
+                                                logger.warning(f"  gt_batch_01: {_stat(gt_batch_01)}")
+                                                logger.warning(f"  diff: {_stat(diff)}")
+                                                logger.warning(f"  mask: {_stat(mask)}")
+                                                logger.warning(
+                                                    f"  t_img(min/mean/max)={float(t_img.min().item()):.6g}/"
+                                                    f"{float(t_img.mean().item()):.6g}/{float(t_img.max().item()):.6g} "
+                                                    f"selected={int(selected.sum().item())}/{len(selected)}"
+                                                )
+                                                logger.warning("=" * 80)
 
 
         ce = None
