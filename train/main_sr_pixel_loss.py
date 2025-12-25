@@ -1283,6 +1283,28 @@ def main():
                 message += f"Train Loss {key}: {avg_loss:.4f}, "
                 log[key] = avg_loss
 
+            # 追加加权后的分项损失（便于 TensorBoard 和日志直接看到“实际参与总损失”的数值）
+            weighted_terms = {}
+            if "ce" in log:
+                weighted_terms["ce_weighted"] = log["ce"] * training_args.ce_weight
+            if "mse" in log:
+                weighted_terms["mse_weighted"] = log["mse"] * training_args.mse_weight
+            if "pixel" in log:
+                weighted_terms["pixel_weighted"] = log["pixel"] * training_args.pixel_loss_weight
+
+            for key, avg_loss in weighted_terms.items():
+                message += f"Train Loss {key}: {avg_loss:.4f}, "
+                log[key] = avg_loss
+
+            # 总损失（已包含权重），对各 rank 取平均后记录
+            total_loss_avg = loss.detach()
+            if total_loss_avg.device != device:
+                total_loss_avg = total_loss_avg.to(device)
+            dist.all_reduce(total_loss_avg, op=dist.ReduceOp.SUM)
+            total_loss_avg = total_loss_avg.item() / dist.get_world_size()
+            message += f"Train Loss total: {total_loss_avg:.4f}, "
+            log["loss_total"] = total_loss_avg
+
             message += f"Train Steps/Sec: {steps_per_sec:.2f}, "
             logger.info(message)
 

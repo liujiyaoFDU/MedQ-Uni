@@ -406,7 +406,8 @@ class Bagel(PreTrainedModel):
                 and len(patchified_vae_latent_shapes) > 0  # 至少一张图
             ):
                 rank = dist.get_rank() if dist.is_initialized() else 0
-                logger.info(f"++ [Pixel Loss Entry] rank={rank} conditions met")
+                if pixel_loss_debug:
+                    logger.info(f"++ [Pixel Loss Entry] rank={rank} conditions met")
                 # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
                 if velocity_pred.shape[0] == int(supervise_mask.sum().item()):  # 确保预测数量与需要计算的 token 数一致
                     # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
@@ -613,7 +614,8 @@ class Bagel(PreTrainedModel):
                                 MIN_DENOM = 1e-3  # 设置最小分母阈值，防止除法爆炸
                                 rank = dist.get_rank() if dist.is_initialized() else 0
                                 if float(denom.item()) > MIN_DENOM:  # denom 足够大，正常计算
-                                    logger.info(f"++ [Pixel Loss Normal] rank={rank} denom={float(denom.item()):.6g}")
+                                    if pixel_loss_debug:
+                                        logger.info(f"++ [Pixel Loss Normal] rank={rank} denom={float(denom.item()):.6g}")
                                     pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
                                 else:  # denom 过小，设置 pixel = 0 并记录警告
                                     logger.warning(f"++ [Pixel Loss Small] rank={rank} denom={float(denom.item()):.6g} < {MIN_DENOM}, setting pixel=0")
@@ -624,7 +626,8 @@ class Bagel(PreTrainedModel):
                                             f"setting pixel=0 to prevent explosion"
                                         )
                                     pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
-                                logger.info(f"++ [Pixel Loss Exit] rank={rank} pixel={float(pixel.item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
+                                if pixel_loss_debug:
+                                    logger.info(f"++ [Pixel Loss Exit] rank={rank} pixel={float(pixel.item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
 
                                 # === Abnormal value diagnostics ===
                                 # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
@@ -703,7 +706,8 @@ class Bagel(PreTrainedModel):
         # If pixel is abnormal (NaN/Inf or >1.0), we clamp it to 0 to prevent contaminating training.
         if pixel is not None:
             rank = dist.get_rank() if dist.is_initialized() else 0
-            logger.info(f"++ [Pixel Loss Final Check] rank={rank} pixel={float(pixel.detach().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
+            if pixel_loss_debug:
+                logger.info(f"++ [Pixel Loss Final Check] rank={rank} pixel={float(pixel.detach().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
             pixel_val = float(pixel.detach().item())
             is_abnormal = (not torch.isfinite(pixel).all().item()) or (pixel_val > 1.0)
             if is_abnormal:
@@ -714,7 +718,8 @@ class Bagel(PreTrainedModel):
                 pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
-        logger.info(f"++ [Pixel Loss Final Check] rank={rank} result:{result}")
+        if pixel_loss_debug:
+            logger.info(f"++ [Pixel Loss Final Check] rank={rank} result:{result}")
 
         shapes = []
         if mse is not None:
@@ -723,7 +728,8 @@ class Bagel(PreTrainedModel):
             shapes.append(f"ce.shape={ce.shape}")
         if pixel is not None:
             shapes.append(f"pixel.shape={pixel.shape}")
-        logger.info(f"++ [Pixel Loss Shape] {', '.join(shapes)}")
+        if pixel_loss_debug:
+            logger.info(f"++ [Pixel Loss Shape] {', '.join(shapes)}")
 
         rank = dist.get_rank() if dist.is_initialized() else 0
         if diffusion_features is not None:
