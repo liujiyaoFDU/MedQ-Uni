@@ -531,6 +531,36 @@ def main():
         logger = create_logger(None, dist.get_rank())
     dist.barrier()
 
+    # Optional: per-rank hang watchdog (no distributed collectives).
+    # If a training step takes longer than the threshold, dump Python traceback to logs.
+    # Enable: export TRAIN_HANG_WATCHDOG_SECS=600
+    hang_watchdog_secs_env = os.environ.get("TRAIN_HANG_WATCHDOG_SECS", "").strip()
+    try:
+        hang_watchdog_secs = float(hang_watchdog_secs_env) if hang_watchdog_secs_env else 0.0
+    except Exception:
+        hang_watchdog_secs = 0.0
+    hang_watchdog_enabled = hang_watchdog_secs > 0
+    if hang_watchdog_enabled:
+        import faulthandler
+        import threading
+
+        faulthandler.enable(all_threads=True)
+
+        def _start_step_watchdog(step: int, stage_ref: list):
+            timer = threading.Timer(
+                hang_watchdog_secs,
+                lambda: (  # noqa: E731 - intentional small lambda wrapper
+                    logger.error(
+                        f"[Hang Watchdog] step={step} rank={int(dist.get_rank())} stage={stage_ref[0]} "
+                        f"exceeded {hang_watchdog_secs:.0f}s; dumping traceback"
+                    ),
+                    faulthandler.dump_traceback(all_threads=True),
+                ),
+            )
+            timer.daemon = True
+            timer.start()
+            return timer
+
     # Optional debug: confirm which code files are actually being executed on the cluster.
     if dist.get_rank() == 0:
         pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
@@ -1044,6 +1074,11 @@ def main():
         if curr_step >= training_args.total_steps:
             break
 
+        stage_ref = ["data_to_cuda"]
+        watchdog_timer = None
+        if hang_watchdog_enabled:
+            watchdog_timer = _start_step_watchdog(curr_step, stage_ref)
+
         data = data.cuda(device).to_dict()
 
         data_check_passed = True
@@ -1079,6 +1114,7 @@ def main():
             assert images_to_encode.dim() == 4, f"Expect NCHW format, got {tuple(images_to_encode.shape)}"
 
             try:
+                stage_ref[0] = "vae_encode"
                 torch.cuda.synchronize()
                 if training_args.freeze_vae:
                     with torch.no_grad():
@@ -1122,6 +1158,7 @@ def main():
         else:
             data.pop('padded_images', None)
 
+        stage_ref[0] = "forward"
         with torch.amp.autocast("cuda", enabled=True, dtype=torch.bfloat16):
             loss_dict = fsdp_model(**data)
 
@@ -1193,10 +1230,12 @@ def main():
             logger.error(f"Step {curr_step}: Abnormal loss value: {loss}")
             torch.distributed.barrier()
         
+        stage_ref[0] = "backward"
         loss.backward()
 
         total_norm = fsdp_model.clip_grad_norm_(training_args.max_grad_norm)
         
+        stage_ref[0] = "optimizer_step"
         optimizer.step()
         scheduler.step()
         torch.cuda.empty_cache()
@@ -1204,6 +1243,7 @@ def main():
         fsdp_ema_update(ema_model, fsdp_model, decay=training_args.ema)
 
         if curr_step % training_args.log_every == 0:
+            stage_ref[0] = "logging"
             total_samples = torch.tensor(len(data['sample_lens']), device=device)
             dist.all_reduce(total_samples, op=dist.ReduceOp.SUM)
 
@@ -1220,11 +1260,24 @@ def main():
 
                     if value.device != device:
                         value = value.to(device)
-                    
+
                     avg_loss = torch.tensor(value.item(), device=device)
                 else:
                     avg_loss = torch.tensor(float(value), device=device)
-                
+
+                # === Critical fix: Catch abnormal pixel loss before all_reduce ===
+                # If any rank has an abnormal pixel value (NaN/Inf or >1.0), it will contaminate
+                # the global average after all_reduce. We clamp it to 0 here to prevent that.
+                if key == "pixel":
+                    pixel_val = float(avg_loss.item())
+                    is_abnormal = (not torch.isfinite(avg_loss).all().item()) or (pixel_val > 1.0)
+                    if is_abnormal:
+                        logger.warning(
+                            f"[Pixel Loss Pre-AllReduce] rank={dist.get_rank()} step={curr_step:07d} "
+                            f"pixel={pixel_val:.6g} is abnormal (NaN/Inf or >1.0), clamping to 0"
+                        )
+                        avg_loss = torch.tensor(0.0, device=device)
+
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
                 avg_loss = avg_loss.item() / dist.get_world_size()
                 message += f"Train Loss {key}: {avg_loss:.4f}, "
@@ -1258,6 +1311,7 @@ def main():
             data_status[item['dataset_name']][item['worker_id']] = item['data_indexes']
 
         if curr_step > 0 and curr_step % training_args.save_every == 0:
+            stage_ref[0] = "checkpoint_save"
             logger.info("Saving checkpoint...")
             torch.cuda.empty_cache()
             
@@ -1305,6 +1359,9 @@ def main():
                     oldest = ckpt_dirs.pop(0)
                     shutil.rmtree(oldest)
                     logger.info(f"Removed old checkpoint: {oldest}")
+
+        if watchdog_timer is not None:
+            watchdog_timer.cancel()
 
     if dist.get_rank() == 0:
         logger.info("=" * 50)

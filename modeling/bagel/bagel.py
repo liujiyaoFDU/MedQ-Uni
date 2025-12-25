@@ -601,8 +601,20 @@ class Bagel(PreTrainedModel):
                                     diff = (x_pred_01 - gt_batch_01).abs()  # L1 差
 
                                 denom = mask.sum() * x_pred_01.shape[1]  # 归一化系数：有效像素数 × 通道数
-                                if float(denom.item()) > 0:  # 防止除零
+                                # === Critical fix: Protect against very small denom causing explosion ===
+                                # If denom is too small (e.g. < 1e-3), division can produce huge values (e.g. 4e12).
+                                # This can happen when mask is nearly all zeros (very few valid pixels).
+                                MIN_DENOM = 1e-3  # 设置最小分母阈值，防止除法爆炸
+                                if float(denom.item()) > MIN_DENOM:  # denom 足够大，正常计算
                                     pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
+                                else:  # denom 过小，设置 pixel = 0 并记录警告
+                                    if pixel_loss_debug:
+                                        logger.warning(
+                                            f"[Pixel Loss] rank={int(dist.get_rank())} "
+                                            f"denom too small: {float(denom.item()):.6g} (< {MIN_DENOM}), "
+                                            f"setting pixel=0 to prevent explosion"
+                                        )
+                                    pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
 
                                     # === Abnormal value diagnostics ===
                                     # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
@@ -667,6 +679,22 @@ class Bagel(PreTrainedModel):
         if ce_loss_indexes is not None:
             packed_ce_preds = self.language_model.lm_head(last_hidden_state[ce_loss_indexes])
             ce = F.cross_entropy(packed_ce_preds, packed_label_ids, reduction="none")
+
+        # === Final safety check: Ensure pixel value is in valid range ===
+        # This is the last line of defense before returning the loss dict.
+        # If pixel is abnormal (NaN/Inf or >1.0), we clamp it to 0 to prevent contaminating training.
+        if pixel is not None:
+            pixel_val = float(pixel.detach().item())
+            is_abnormal = (not torch.isfinite(pixel).all().item()) or (pixel_val > 1.0)
+            if is_abnormal:
+                import logging
+                import torch.distributed as dist
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"[Pixel Loss Final Check] rank={int(dist.get_rank())} "
+                    f"pixel={pixel_val:.6g} out of valid range [0,1], clamping to 0"
+                )
+                pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
         if diffusion_features is not None:
