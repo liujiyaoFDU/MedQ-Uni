@@ -6,15 +6,19 @@
 # Modifications: Added intermediate layer extraction capabilities.
 
 import copy
+import logging
 import os
 from typing import List, Tuple, Optional
 
 import torch
 import torch.nn.functional as F
+import torch.distributed as dist
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
+
+logger = logging.getLogger(__name__)
 
 from data.data_utils import (
     create_sparse_mask, 
@@ -401,7 +405,8 @@ class Bagel(PreTrainedModel):
                 and packed_timesteps is not None  # 需有时间步
                 and len(patchified_vae_latent_shapes) > 0  # 至少一张图
             ):
-                print(f"+++pixel loss entry conditions met!!")
+                rank = dist.get_rank() if dist.is_initialized() else 0
+                logger.info(f"++ [Pixel Loss Entry] rank={rank} conditions met")
                 # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
                 if velocity_pred.shape[0] == int(supervise_mask.sum().item()):  # 确保预测数量与需要计算的 token 数一致
                     # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
@@ -606,11 +611,12 @@ class Bagel(PreTrainedModel):
                                 # If denom is too small (e.g. < 1e-3), division can produce huge values (e.g. 4e12).
                                 # This can happen when mask is nearly all zeros (very few valid pixels).
                                 MIN_DENOM = 1e-3  # 设置最小分母阈值，防止除法爆炸
+                                rank = dist.get_rank() if dist.is_initialized() else 0
                                 if float(denom.item()) > MIN_DENOM:  # denom 足够大，正常计算
-                                    print(f"+++pixel loss normal conditions met!! {denom}")
+                                    logger.info(f"++ [Pixel Loss Normal] rank={rank} denom={float(denom.item()):.6g}")
                                     pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
                                 else:  # denom 过小，设置 pixel = 0 并记录警告
-                                    print(f"+++pixel loss small conditions met!! {denom}")
+                                    logger.warning(f"++ [Pixel Loss Small] rank={rank} denom={float(denom.item()):.6g} < {MIN_DENOM}, setting pixel=0")
                                     if pixel_loss_debug:
                                         logger.warning(
                                             f"[Pixel Loss] rank={int(dist.get_rank())} "
@@ -618,19 +624,20 @@ class Bagel(PreTrainedModel):
                                             f"setting pixel=0 to prevent explosion"
                                         )
                                     pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
-                                print(f"+++pixel loss exit conditions met!! {pixel}")
+                                logger.info(f"++ [Pixel Loss Exit] rank={rank} pixel={float(pixel.item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
 
                                     # === Abnormal value diagnostics ===
                                     # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
                                     # 若出现巨大的 pixel（例如 1e11），说明存在 NaN/Inf、dtype/广播异常或 mask/denom 异常。
                                     # 异常情况可能只发生在某个 rank 的某个样本上，因此这里不要只限制 rank0，
-                                    # 否则分布式训练时会“看不到”非 rank0 上的爆炸根因。
+                                    # 否则分布式训练时会"看不到"非 rank0 上的爆炸根因。
                                     if pixel_loss_debug:
-                                        print(f"+++pixel loss abnormal conditions met!! {pixel}")
+                                        rank = dist.get_rank() if dist.is_initialized() else 0
+                                        logger.warning(f"++ [Pixel Loss Abnormal] rank={rank} checking pixel={float(pixel.detach().float().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
                                         pixel_scalar = float(pixel.detach().float().item())
                                         if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
                                             max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
-                                            print(f"+++pixel loss max reports env!! {max_reports_env}")
+                                            logger.debug(f"++ [Pixel Loss Debug] rank={rank} max_reports_env={max_reports_env}")
                                             try:
                                                 max_reports = int(max_reports_env)
                                             except Exception:
@@ -690,22 +697,23 @@ class Bagel(PreTrainedModel):
         # This is the last line of defense before returning the loss dict.
         # If pixel is abnormal (NaN/Inf or >1.0), we clamp it to 0 to prevent contaminating training.
         if pixel is not None:
-            print(f"+++pixel loss final check conditions met!! {pixel}")
-            print(f"+++pixel loss final check conditions met!! {pixel.shape}")
-            
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            logger.info(f"++ [Pixel Loss Final Check] rank={rank} pixel={float(pixel.detach().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
+            pixel_val = float(pixel.detach().item())
             is_abnormal = (not torch.isfinite(pixel).all().item()) or (pixel_val > 1.0)
             if is_abnormal:
-                import logging
-                import torch.distributed as dist
-                logger = logging.getLogger(__name__)
                 logger.warning(
-                    f"[Pixel Loss Final Check] rank={int(dist.get_rank())} "
+                    f"++ [Pixel Loss Final Check Abnormal] rank={rank} "
                     f"pixel={pixel_val:.6g} out of valid range [0,1], clamping to 0"
                 )
                 pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
-        print(f"++++++pixel loss result!! {result.items()}")
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        mse_info = f"mse={float(mse.item()):.6g}" if mse is not None else "mse=None"
+        ce_info = f"ce={float(ce.mean().item()):.6g}" if ce is not None else "ce=None"
+        pixel_info = f"pixel={float(pixel.item()):.6g} shape={pixel.shape}" if pixel is not None else "pixel=None"
+        logger.info(f"++ [Pixel Loss Result] rank={rank} {mse_info}, {ce_info}, {pixel_info}")
         if diffusion_features is not None:
             result['diffusion_features'] = diffusion_features
 
