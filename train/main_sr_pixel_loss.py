@@ -530,6 +530,16 @@ def main():
     else:
         logger = create_logger(None, dist.get_rank())
     dist.barrier()
+
+    # Optional debug: confirm which code files are actually being executed on the cluster.
+    if dist.get_rank() == 0:
+        pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+        if pixel_loss_debug:
+            try:
+                import modeling.bagel.bagel as bagel_mod
+                logger.info(f"[Pixel Loss Debug] code_paths train={__file__} bagel={bagel_mod.__file__}")
+            except Exception as e:
+                logger.warning(f"[Pixel Loss Debug] failed to resolve code_paths: {e}")
     
     if dist.get_rank() == 0:
         for m in startup_msgs:
@@ -1142,6 +1152,41 @@ def main():
 
             pixel = loss_dict.get("pixel")
             if pixel is not None:
+                # Debug: find which rank produces abnormal pixel loss.
+                # The logged "Train Loss pixel" is averaged across ranks; a single-rank blow-up will contaminate the global value.
+                pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+                if pixel_loss_debug and dist.is_initialized():
+                    try:
+                        pixel_val = pixel.detach().float().view(1)
+                    except Exception:
+                        pixel_val = torch.tensor([float("nan")], device=device)
+
+                    abnormal_local = (
+                        (not torch.isfinite(pixel_val).all().item())
+                        or float(pixel_val.item()) > 1.01
+                    )
+                    abnormal_flag = torch.tensor([1 if abnormal_local else 0], device=device, dtype=torch.int32)
+                    dist.all_reduce(abnormal_flag, op=dist.ReduceOp.MAX)
+
+                    if int(abnormal_flag.item()) == 1 and dist.get_rank() == 0:
+                        max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_TRAIN_MAX", "10")
+                        try:
+                            max_reports = int(max_reports_env)
+                        except Exception:
+                            max_reports = 10
+                        reported = int(globals().get("_pixel_loss_train_abnormal_reports", 0))
+                        if reported < max_reports:
+                            globals()["_pixel_loss_train_abnormal_reports"] = reported + 1
+
+                            gathered = [torch.zeros_like(pixel_val) for _ in range(dist.get_world_size())]
+                            dist.all_gather(gathered, pixel_val)
+                            gathered_vals = [float(t.item()) for t in gathered]
+                            bad_ranks = [i for i, v in enumerate(gathered_vals) if (not (v == v)) or v > 1.01]  # NaN check via v==v
+                            logger.warning(
+                                f"[Pixel Loss Train Debug] abnormal pixel detected. "
+                                f"bad_ranks={bad_ranks} pixel_vals(sample)={[(i, gathered_vals[i]) for i in bad_ranks[:8]]}"
+                            )
+
                 loss_dict["pixel"] = pixel.detach()
                 loss += pixel * training_args.pixel_loss_weight
             else:
