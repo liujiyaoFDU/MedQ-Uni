@@ -401,6 +401,7 @@ class Bagel(PreTrainedModel):
                 and packed_timesteps is not None  # 需有时间步
                 and len(patchified_vae_latent_shapes) > 0  # 至少一张图
             ):
+                print(f"+++pixel loss entry conditions met!!")
                 # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
                 if velocity_pred.shape[0] == int(supervise_mask.sum().item()):  # 确保预测数量与需要计算的 token 数一致
                     # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
@@ -606,8 +607,10 @@ class Bagel(PreTrainedModel):
                                 # This can happen when mask is nearly all zeros (very few valid pixels).
                                 MIN_DENOM = 1e-3  # 设置最小分母阈值，防止除法爆炸
                                 if float(denom.item()) > MIN_DENOM:  # denom 足够大，正常计算
+                                    print(f"+++pixel loss normal conditions met!! {denom}")
                                     pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
                                 else:  # denom 过小，设置 pixel = 0 并记录警告
+                                    print(f"+++pixel loss small conditions met!! {denom}")
                                     if pixel_loss_debug:
                                         logger.warning(
                                             f"[Pixel Loss] rank={int(dist.get_rank())} "
@@ -615,6 +618,7 @@ class Bagel(PreTrainedModel):
                                             f"setting pixel=0 to prevent explosion"
                                         )
                                     pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
+                                print(f"+++pixel loss exit conditions met!! {pixel}")
 
                                     # === Abnormal value diagnostics ===
                                     # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
@@ -622,9 +626,11 @@ class Bagel(PreTrainedModel):
                                     # 异常情况可能只发生在某个 rank 的某个样本上，因此这里不要只限制 rank0，
                                     # 否则分布式训练时会“看不到”非 rank0 上的爆炸根因。
                                     if pixel_loss_debug:
+                                        print(f"+++pixel loss abnormal conditions met!! {pixel}")
                                         pixel_scalar = float(pixel.detach().float().item())
                                         if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
                                             max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
+                                            print(f"+++pixel loss max reports env!! {max_reports_env}")
                                             try:
                                                 max_reports = int(max_reports_env)
                                             except Exception:
@@ -684,7 +690,9 @@ class Bagel(PreTrainedModel):
         # This is the last line of defense before returning the loss dict.
         # If pixel is abnormal (NaN/Inf or >1.0), we clamp it to 0 to prevent contaminating training.
         if pixel is not None:
-            pixel_val = float(pixel.detach().item())
+            print(f"+++pixel loss final check conditions met!! {pixel}")
+            print(f"+++pixel loss final check conditions met!! {pixel.shape}")
+            
             is_abnormal = (not torch.isfinite(pixel).all().item()) or (pixel_val > 1.0)
             if is_abnormal:
                 import logging
@@ -697,6 +705,7 @@ class Bagel(PreTrainedModel):
                 pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
+        print(f"++++++pixel loss result!! {result.items()}")
         if diffusion_features is not None:
             result['diffusion_features'] = diffusion_features
 
