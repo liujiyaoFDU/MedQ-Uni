@@ -27,11 +27,11 @@ import pandas as pd
 # Default input directories to search (used if --directories is not specified)
 # Modify these paths according to your project structure
 DEFAULT_INPUT_DIRECTORIES = [
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_50_eye_ctu_stage1_comb_v1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1_0001000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_50_eye_ctu_stage1_comb_v1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1_0002000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_50_eye_ctu_stage1_comb_v1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1_0004000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_50_eye_ctu_stage1_comb_v1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1_0006000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_50_eye_ctu_stage1_comb_v1/stage1_medq_2nodes_unif_combined_eyeQ_ctu_from_stage1_medq_2nodes_unif_combined_v1_0008000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_test_1000_ver1/stage1_medq_2nodes_unif_combined_v1_0004000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_test_1000_ver1/stage1_medq_2nodes_unif_combined_v1_0008000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_test_1000_ver1/stage1_medq_2nodes_unif_combined_v1_0012000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_test_1000_ver1/stage1_medq_2nodes_unif_combined_v1_0016000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_test_1000_ver1/stage1_medq_2nodes_unif_combined_v1_0020000"
 ]
 
 
