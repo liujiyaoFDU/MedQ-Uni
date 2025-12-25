@@ -426,7 +426,8 @@ class Bagel(PreTrainedModel):
                         t_img = t_tokens_all[image_start_ptrs].to(z0_tokens_clean.dtype)  # 获取每张图的时间步（第一 token）
 
                         # Optional: verify mapping between (VAE token order) and (sequence positions) + mse mask.
-                        if pixel_loss_debug_verbose:
+                        # 需要 pixel_loss_debug 同时开启，确保 logger/dist 已初始化。
+                        if pixel_loss_debug and pixel_loss_debug_verbose:
                             max_verbose_env = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE_MAX", "5")
                             try:
                                 max_verbose = int(max_verbose_env)
@@ -438,28 +439,46 @@ class Bagel(PreTrainedModel):
 
                                 vae_seq_pos = packed_vae_token_indexes  # (num_vae_tokens,) 每个 VAE token 在 packed_sequence 中的位置
                                 is_sorted = bool(torch.all(vae_seq_pos[1:] >= vae_seq_pos[:-1]).item()) if vae_seq_pos.numel() > 1 else True
+                                mse_kind = "none"
+                                mse_count = -1
+                                mse_min = -1
+                                mse_max = -1
+                                if mse_loss_indexes is not None:
+                                    if mse_loss_indexes.dtype == torch.bool:
+                                        mse_kind = "mask"
+                                        mse_count = int(mse_loss_indexes.sum().item())
+                                        mse_seq_pos = torch.nonzero(mse_loss_indexes, as_tuple=False).squeeze(-1)
+                                    else:
+                                        # 在本项目里 mse_loss_indexes 往往是 “sequence 位置索引列表”，不是 bool mask。
+                                        mse_kind = "indices"
+                                        mse_seq_pos = mse_loss_indexes.to(device=device, dtype=torch.long).view(-1)
+                                        mse_count = int(mse_seq_pos.numel())
+                                    if mse_seq_pos.numel() > 0:
+                                        mse_min = int(mse_seq_pos.min().item())
+                                        mse_max = int(mse_seq_pos.max().item())
+
                                 logger.info(
                                     f"[Pixel Loss Debug] mapping_check rank={int(dist.get_rank())} "
                                     f"total_vae_tokens={int(vae_seq_pos.numel())} expected={int(total_tokens_expected)} "
                                     f"vae_seq_pos(min/max)={int(vae_seq_pos.min().item())}/{int(vae_seq_pos.max().item())} "
                                     f"sorted={is_sorted} "
                                     f"supervised_tokens={int(supervise_mask.sum().item())} "
-                                    f"mse_loss_indexes_sum={int(mse_loss_indexes.sum().item()) if mse_loss_indexes is not None else -1}"
+                                    f"mse_loss_indexes(kind={mse_kind},count={mse_count},min/max={mse_min}/{mse_max})"
                                 )
-                                if mse_loss_indexes is not None:
-                                    mse_seq_pos = torch.nonzero(mse_loss_indexes, as_tuple=False).squeeze(-1)
+
+                                # 校验：mse_loss_indexes 是否等于 “VAE tokens 中 t>0 的那一部分” 对应的 sequence 位置集合
+                                if mse_loss_indexes is not None and mse_kind != "none":
                                     expected_mse_seq_pos = vae_seq_pos[supervise_mask]
                                     same_count = int(mse_seq_pos.numel()) == int(expected_mse_seq_pos.numel())
+                                    same_set = False
                                     if same_count:
                                         mse_sorted = torch.sort(mse_seq_pos).values
                                         expected_sorted = torch.sort(expected_mse_seq_pos).values
                                         same_set = bool(torch.equal(mse_sorted, expected_sorted))
-                                    else:
-                                        same_set = False
-                                    if not same_set and dist.get_rank() == 0:
+                                    if (not same_set) and dist.get_rank() == 0:
                                         logger.warning(
-                                            "[Pixel Loss Debug] mse_loss_indexes does not match expected supervised VAE tokens; "
-                                            "this can indicate sequence packing / mask misalignment."
+                                            "[Pixel Loss Debug] mse_loss_indexes does not match expected supervised VAE token positions; "
+                                            "this suggests sequence packing / timestep-mask misalignment."
                                         )
 
                         # Target images are those with t>0 (conditioning images use t=0 via -inf sentinel).
