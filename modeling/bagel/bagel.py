@@ -376,9 +376,6 @@ class Bagel(PreTrainedModel):
             pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}  # 环境变量控制调试输出
             pixel_loss_debug_verbose = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE", "").lower() in {"1", "true", "yes", "y"}  # 更详细的调试输出（可能较多）
             if pixel_loss_debug and self.training and pixel_loss_weight > 0:  # 仅在训练且权重大于 0 时打印调试信息
-                import logging
-                import torch.distributed as dist
-                logger = logging.getLogger(__name__)
                 if dist.get_rank() == 0:
                     logger.info("="*60)
                     logger.info("[Pixel Loss Entry] Checking entry conditions")
@@ -505,9 +502,6 @@ class Bagel(PreTrainedModel):
 
                         # Debug summary (rank 0 only).
                         if pixel_loss_debug:
-                            import logging
-                            import torch.distributed as dist
-                            logger = logging.getLogger(__name__)
                             if dist.get_rank() == 0:
                                 logger.info(
                                     f"[Pixel Loss Debug] images={len(t_img)} target={int(image_is_target.sum().item())} "
