@@ -1168,24 +1168,27 @@ def main():
                     abnormal_flag = torch.tensor([1 if abnormal_local else 0], device=device, dtype=torch.int32)
                     dist.all_reduce(abnormal_flag, op=dist.ReduceOp.MAX)
 
-                    if int(abnormal_flag.item()) == 1 and dist.get_rank() == 0:
-                        max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_TRAIN_MAX", "10")
-                        try:
-                            max_reports = int(max_reports_env)
-                        except Exception:
-                            max_reports = 10
-                        reported = int(globals().get("_pixel_loss_train_abnormal_reports", 0))
-                        if reported < max_reports:
-                            globals()["_pixel_loss_train_abnormal_reports"] = reported + 1
+                    # NOTE: all_gather 是 collective，必须所有 rank 一起调用；不能只在 rank0 调用，否则会卡住。
+                    if int(abnormal_flag.item()) == 1:
+                        gathered = [torch.zeros_like(pixel_val) for _ in range(dist.get_world_size())]
+                        dist.all_gather(gathered, pixel_val)
 
-                            gathered = [torch.zeros_like(pixel_val) for _ in range(dist.get_world_size())]
-                            dist.all_gather(gathered, pixel_val)
-                            gathered_vals = [float(t.item()) for t in gathered]
-                            bad_ranks = [i for i, v in enumerate(gathered_vals) if (not (v == v)) or v > 1.01]  # NaN check via v==v
-                            logger.warning(
-                                f"[Pixel Loss Train Debug] abnormal pixel detected. "
-                                f"bad_ranks={bad_ranks} pixel_vals(sample)={[(i, gathered_vals[i]) for i in bad_ranks[:8]]}"
-                            )
+                        if dist.get_rank() == 0:
+                            max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_TRAIN_MAX", "10")
+                            try:
+                                max_reports = int(max_reports_env)
+                            except Exception:
+                                max_reports = 10
+                            reported = int(globals().get("_pixel_loss_train_abnormal_reports", 0))
+                            if reported < max_reports:
+                                globals()["_pixel_loss_train_abnormal_reports"] = reported + 1
+
+                                gathered_vals = [float(t.item()) for t in gathered]
+                                bad_ranks = [i for i, v in enumerate(gathered_vals) if (not (v == v)) or v > 1.01]  # NaN check via v==v
+                                logger.warning(
+                                    f"[Pixel Loss Train Debug] abnormal pixel detected. "
+                                    f"bad_ranks={bad_ranks} pixel_vals(sample)={[(i, gathered_vals[i]) for i in bad_ranks[:8]]}"
+                                )
 
                 loss_dict["pixel"] = pixel.detach()
                 loss += pixel * training_args.pixel_loss_weight
