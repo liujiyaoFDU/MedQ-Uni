@@ -686,6 +686,11 @@ class Bagel(PreTrainedModel):
                                                 f"selected={int(selected.sum().item())}/{len(selected)}"
                                             )
                                             logger.warning("=" * 80)
+                        else:
+                            # 无图进入像素损失时，直接返回 0，避免 pixel=None 污染后续 all_reduce
+                            if pixel_loss_debug and dist.get_rank() == 0:
+                                logger.info("++ [Pixel Loss Skip] selected==0, setting pixel=0")
+                            pixel = torch.tensor(0.0, device=z0_tokens_hybrid.device, dtype=z0_tokens_hybrid.dtype)
 
 
         ce = None
