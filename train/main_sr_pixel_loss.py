@@ -1065,7 +1065,11 @@ def main():
         if not data_check_passed:
             logger.warning(f"Step {curr_step}: Data integrity check failed")
             
-        torch.distributed.barrier()
+        # NOTE: a per-step barrier can easily deadlock if any rank stalls/crashes, and it also slows training.
+        # Keep it opt-in for debugging only.
+        step_barrier = os.environ.get("TRAIN_STEP_BARRIER", "").lower() in {"1", "true", "yes", "y"}
+        if step_barrier:
+            torch.distributed.barrier()
 
         data_indexes = data.pop('batch_data_indexes', None)
         ce_loss_weights = data.pop('ce_loss_weights', None)
@@ -1154,6 +1158,9 @@ def main():
             if pixel is not None:
                 # Debug: find which rank produces abnormal pixel loss.
                 # The logged "Train Loss pixel" is averaged across ranks; a single-rank blow-up will contaminate the global value.
+                #
+                # IMPORTANT: avoid collective ops (all_gather) here by default; if only some ranks enter a collective
+                # the job can deadlock. Prefer per-rank logging on abnormal_local.
                 pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
                 if pixel_loss_debug and dist.is_initialized():
                     try:
@@ -1165,30 +1172,11 @@ def main():
                         (not torch.isfinite(pixel_val).all().item())
                         or float(pixel_val.item()) > 1.01
                     )
-                    abnormal_flag = torch.tensor([1 if abnormal_local else 0], device=device, dtype=torch.int32)
-                    dist.all_reduce(abnormal_flag, op=dist.ReduceOp.MAX)
-
-                    # NOTE: all_gather 是 collective，必须所有 rank 一起调用；不能只在 rank0 调用，否则会卡住。
-                    if int(abnormal_flag.item()) == 1:
-                        gathered = [torch.zeros_like(pixel_val) for _ in range(dist.get_world_size())]
-                        dist.all_gather(gathered, pixel_val)
-
-                        if dist.get_rank() == 0:
-                            max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_TRAIN_MAX", "10")
-                            try:
-                                max_reports = int(max_reports_env)
-                            except Exception:
-                                max_reports = 10
-                            reported = int(globals().get("_pixel_loss_train_abnormal_reports", 0))
-                            if reported < max_reports:
-                                globals()["_pixel_loss_train_abnormal_reports"] = reported + 1
-
-                                gathered_vals = [float(t.item()) for t in gathered]
-                                bad_ranks = [i for i, v in enumerate(gathered_vals) if (not (v == v)) or v > 1.01]  # NaN check via v==v
-                                logger.warning(
-                                    f"[Pixel Loss Train Debug] abnormal pixel detected. "
-                                    f"bad_ranks={bad_ranks} pixel_vals(sample)={[(i, gathered_vals[i]) for i in bad_ranks[:8]]}"
-                                )
+                    if abnormal_local:
+                        logger.warning(
+                            f"[Pixel Loss Train Debug] abnormal_local=True rank={int(dist.get_rank())} "
+                            f"step={curr_step} pixel={float(pixel_val.item()):.6g}"
+                        )
 
                 loss_dict["pixel"] = pixel.detach()
                 loss += pixel * training_args.pixel_loss_weight

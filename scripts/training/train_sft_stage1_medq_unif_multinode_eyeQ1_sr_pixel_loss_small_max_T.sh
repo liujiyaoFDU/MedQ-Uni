@@ -82,8 +82,8 @@ EMA_DECAY=0.995
 # ============================================================================
 # Enable detailed pixel-loss diagnostics in modeling/bagel/bagel.py.
 # Set to 0/empty to disable for long runs.
-export PIXEL_LOSS_DEBUG="${PIXEL_LOSS_DEBUG:-1}"
-export PIXEL_LOSS_DEBUG_VERBOSE="${PIXEL_LOSS_DEBUG_VERBOSE:-1}"
+export PIXEL_LOSS_DEBUG="${PIXEL_LOSS_DEBUG:-0}"
+export PIXEL_LOSS_DEBUG_VERBOSE="${PIXEL_LOSS_DEBUG_VERBOSE:-0}"
 export PIXEL_LOSS_DEBUG_VERBOSE_MAX="${PIXEL_LOSS_DEBUG_VERBOSE_MAX:-2}"
 export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
 
