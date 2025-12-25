@@ -626,11 +626,15 @@ class Bagel(PreTrainedModel):
                                     pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
                                 logger.info(f"++ [Pixel Loss Exit] rank={rank} pixel={float(pixel.item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
 
+<<<<<<< Updated upstream
 <<<<<<< HEAD
+=======
+>>>>>>> Stashed changes
                                 # === Abnormal value diagnostics ===
                                 # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
                                 # 若出现巨大的 pixel（例如 1e11），说明存在 NaN/Inf、dtype/广播异常或 mask/denom 异常。
                                 # 异常情况可能只发生在某个 rank 的某个样本上，因此这里不要只限制 rank0，
+<<<<<<< Updated upstream
                                 # 否则分布式训练时会“看不到”非 rank0 上的爆炸根因。
                                 if pixel_loss_debug:
                                     print(f"+++pixel loss abnormal conditions met!! {pixel}")
@@ -638,6 +642,17 @@ class Bagel(PreTrainedModel):
                                     if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
                                         max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
                                         print(f"+++pixel loss max reports env!! {max_reports_env}")
+=======
+                                # 否则分布式训练时会"看不到"非 rank0 上的爆炸根因。
+                                reported = 0
+                                if pixel_loss_debug:
+                                    rank = dist.get_rank() if dist.is_initialized() else 0
+                                    logger.warning(f"++ [Pixel Loss Abnormal] rank={rank} checking pixel={float(pixel.detach().float().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
+                                    pixel_scalar = float(pixel.detach().float().item())
+                                    if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
+                                        max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
+                                        logger.debug(f"++ [Pixel Loss Debug] rank={rank} max_reports_env={max_reports_env}")
+>>>>>>> Stashed changes
                                         try:
                                             max_reports = int(max_reports_env)
                                         except Exception:
@@ -648,6 +663,7 @@ class Bagel(PreTrainedModel):
                                             pass
                                         else:
                                             setattr(self, "_pixel_loss_abnormal_reports", reported + 1)
+<<<<<<< Updated upstream
 =======
                                     # === Abnormal value diagnostics ===
                                     # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
@@ -672,6 +688,8 @@ class Bagel(PreTrainedModel):
                                             else:
                                                 setattr(self, "_pixel_loss_abnormal_reports", reported + 1)
 >>>>>>> 8457150267a83f9f0cdae6b19f994f96a0ba55c8
+=======
+>>>>>>> Stashed changes
 
                                         def _stat(t: torch.Tensor):
                                             t_f = t.detach().float()
