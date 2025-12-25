@@ -78,6 +78,16 @@ PIXEL_LOSS_MAX_T=0.5  # 增加到 1.0，覆盖几乎所有时间步
 EMA_DECAY=0.995
 
 # ============================================================================
+# Pixel Loss Debugging (optional)
+# ============================================================================
+# Enable detailed pixel-loss diagnostics in modeling/bagel/bagel.py.
+# Set to 0/empty to disable for long runs.
+export PIXEL_LOSS_DEBUG="${PIXEL_LOSS_DEBUG:-1}"
+export PIXEL_LOSS_DEBUG_VERBOSE="${PIXEL_LOSS_DEBUG_VERBOSE:-1}"
+export PIXEL_LOSS_DEBUG_VERBOSE_MAX="${PIXEL_LOSS_DEBUG_VERBOSE_MAX:-2}"
+export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
+
+# ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
 EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T}"  # Experiment name
