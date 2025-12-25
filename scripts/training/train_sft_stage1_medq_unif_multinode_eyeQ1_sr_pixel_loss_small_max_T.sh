@@ -50,8 +50,8 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
-# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
+# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
 
@@ -90,7 +90,7 @@ export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T}"  # Experiment name
+EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6}"  # Experiment name
 NUM_GPUS="${2:-8}"
 MASTER_PORT="${3:-23456}"
 
