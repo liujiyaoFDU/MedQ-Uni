@@ -709,11 +709,18 @@ class Bagel(PreTrainedModel):
                 pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
+        logger.info(f"++ [Pixel Loss Final Check] rank={rank} result:{result}")
+
+        shapes = []
+        if mse is not None:
+            shapes.append(f"mse.shape={mse.shape}")
+        if ce is not None:
+            shapes.append(f"ce.shape={ce.shape}")
+        if pixel is not None:
+            shapes.append(f"pixel.shape={pixel.shape}")
+        logger.info(f"++ [Pixel Loss Shape] {', '.join(shapes)}")
+
         rank = dist.get_rank() if dist.is_initialized() else 0
-        mse_info = f"mse={float(mse.item()):.6g}" if mse is not None else "mse=None"
-        ce_info = f"ce={float(ce.mean().item()):.6g}" if ce is not None else "ce=None"
-        pixel_info = f"pixel={float(pixel.item()):.6g} shape={pixel.shape}" if pixel is not None else "pixel=None"
-        logger.info(f"++ [Pixel Loss Result] rank={rank} {mse_info}, {ce_info}, {pixel_info}")
         if diffusion_features is not None:
             result['diffusion_features'] = diffusion_features
 
