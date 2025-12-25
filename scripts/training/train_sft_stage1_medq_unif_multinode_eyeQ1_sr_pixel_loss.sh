@@ -51,12 +51,12 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
 
-TOTAL_STEPS=2001
-SAVE_EVERY=500
+TOTAL_STEPS=12000
+SAVE_EVERY=2000
 LOG_EVERY=1
 
 LEARNING_RATE=1e-6
@@ -70,7 +70,7 @@ MSE_WEIGHT=1.0
 
 # Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
 # NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=0.05
+PIXEL_LOSS_WEIGHT=50
 PIXEL_LOSS_TYPE="l2"
 
 PIXEL_LOSS_MAX_T=1  # 增加到 1.0，覆盖几乎所有时间步
@@ -194,8 +194,8 @@ torchrun \
   --checkpoint_dir "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/${EXP_NAME}" \
   --model_path "${MODEL_PATH}" \
   --resume_from  "${MODEL_PATH}" \
-  --resume_model_only True \
-  --resume_model_optimizer False \
+  --resume_model_only False \
+  --resume_model_optimizer True \
   --finetune_from_hf True \
   --finetune_from_ema False \
   --auto_resume True \
