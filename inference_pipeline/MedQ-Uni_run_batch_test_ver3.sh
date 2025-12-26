@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# 批量测试脚本 - 支持多个 checkpoints 和多 GPU 并行推理
-# 用法: ./MedQ-Uni_run_batch_test_ver2.sh
+# 批量测试脚本 ver3 - 支持多个 checkpoints 和多 GPU 并行推理
+# 用法: ./MedQ-Uni_run_batch_test_ver3.sh
 # 特性:
 #   1. 支持多个 checkpoint 模型
 #   2. 支持多个 jsonl 测试文件
 #   3. 结果按 checkpoint 分文件夹存储
 #   4. 多 GPU 并行执行（每个任务用单个 GPU）
+#   5. [NEW] 支持指定每个 GPU 上运行多个并行任务
+#   6. [NEW] 自动任务调度：当一个任务完成后自动从队列获取下一个任务
 
 cd /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni
 source .venv/bin/activate
@@ -17,6 +19,9 @@ SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]}")
 # ============================================================
 # 配置参数
 # ============================================================
+
+# [NEW] 每个 GPU 上的并行任务数（根据显存大小和任务内存需求调整）
+TASKS_PER_GPU=3
 
 # 多个 checkpoint 路径列表 - 在这里添加你要测试的所有 checkpoint
 CHECKPOINTS=(
@@ -85,9 +90,9 @@ ANNOTATION_FILES=(
 # 可用的 GPU 列表（用于并行执行）
 GPUS=(
     "0"
-    "1" 
+    "1"
     "2"
-    "3" 
+    "3"
 )
 
 IMAGE_ROOT="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images"
@@ -114,21 +119,83 @@ SEED=42
 NUM_SAMPLES=50
 
 # ============================================================
+# 任务队列和统计变量
+# ============================================================
+
+# 临时目录用于任务队列管理
+TEMP_DIR=$(mktemp -d)
+TASK_QUEUE_FILE="${TEMP_DIR}/task_queue.txt"
+TASK_LOCK_FILE="${TEMP_DIR}/task_queue.lock"
+STATS_FILE="${TEMP_DIR}/stats.txt"
+STATS_LOCK_FILE="${TEMP_DIR}/stats.lock"
+
+# 初始化统计文件
+echo "0 0" > "$STATS_FILE"  # completed failed
+
+# 清理函数
+cleanup() {
+    echo ""
+    echo "清理临时文件..."
+    rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT
+
+# ============================================================
 # 任务管理函数
 # ============================================================
 
-# 任务计数器
-TOTAL_TASKS=0
-COMPLETED_TASKS=0
-FAILED_TASKS=0
+# 从队列获取下一个任务（线程安全）
+get_next_task() {
+    local task=""
+
+    # 使用文件锁确保线程安全
+    (
+        flock -x 200
+
+        if [ -s "$TASK_QUEUE_FILE" ]; then
+            # 读取第一行作为任务
+            task=$(head -n 1 "$TASK_QUEUE_FILE")
+            # 删除第一行
+            tail -n +2 "$TASK_QUEUE_FILE" > "${TASK_QUEUE_FILE}.tmp"
+            mv "${TASK_QUEUE_FILE}.tmp" "$TASK_QUEUE_FILE"
+            echo "$task"
+        fi
+    ) 200>"$TASK_LOCK_FILE"
+}
+
+# 更新统计信息（线程安全）
+update_stats() {
+    local success=$1  # 1 for success, 0 for failure
+
+    (
+        flock -x 200
+
+        read completed failed < "$STATS_FILE"
+        if [ "$success" -eq 1 ]; then
+            completed=$((completed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+        echo "$completed $failed" > "$STATS_FILE"
+    ) 200>"$STATS_LOCK_FILE"
+}
+
+# 获取当前统计信息
+get_stats() {
+    (
+        flock -s 200
+        cat "$STATS_FILE"
+    ) 200>"$STATS_LOCK_FILE"
+}
 
 # 执行推理任务的函数
 run_inference() {
     local checkpoint=$1
     local annotation_file=$2
     local gpu=$3
-    local ckpt_name=$4
-    local dataset_name=$5
+    local worker_id=$4
+    local ckpt_name=$5
+    local dataset_name=$6
 
     # 创建输出目录：按 checkpoint 分文件夹
     local output_dir="${BASE_OUTPUT_DIR}/${ckpt_name}/${dataset_name}"
@@ -136,7 +203,7 @@ run_inference() {
     # 创建日志文件的父目录（如果不存在）
     mkdir -p "${BASE_OUTPUT_DIR}/${ckpt_name}"
 
-    echo "[GPU $gpu] 开始推理: $dataset_name (checkpoint: $ckpt_name)"
+    echo "[GPU $gpu Worker $worker_id] 开始推理: $dataset_name (checkpoint: $ckpt_name)"
 
     # 设置该任务专用的 CUDA_VISIBLE_DEVICES
     CUDA_VISIBLE_DEVICES=$gpu python inference_pipeline/MedQ-Uni_run_batch_test2.py \
@@ -152,19 +219,60 @@ run_inference() {
         --timestep_shift "$TIMESTEP_SHIFT" \
         --seed "$SEED" \
         --num_samples "$NUM_SAMPLES" \
-        > "${output_dir}_gpu${gpu}.log" 2>&1
+        > "${output_dir}_gpu${gpu}_worker${worker_id}.log" 2>&1
 
     local exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
-        echo "[GPU $gpu] ✓ 完成: $dataset_name (checkpoint: $ckpt_name)"
-        ((COMPLETED_TASKS++))
+        echo "[GPU $gpu Worker $worker_id] ✓ 完成: $dataset_name (checkpoint: $ckpt_name)"
+        update_stats 1
     else
-        echo "[GPU $gpu] ✗ 失败: $dataset_name (checkpoint: $ckpt_name)"
-        ((FAILED_TASKS++))
+        echo "[GPU $gpu Worker $worker_id] ✗ 失败: $dataset_name (checkpoint: $ckpt_name)"
+        update_stats 0
     fi
 
     return $exit_code
+}
+
+# Worker 进程：持续从队列获取任务并执行
+worker_process() {
+    local gpu=$1
+    local worker_id=$2
+    local checkpoint=$3
+    local ckpt_name=$4
+
+    echo "[GPU $gpu Worker $worker_id] 启动，等待任务..."
+
+    while true; do
+        # 从队列获取下一个任务
+        local task=$(get_next_task)
+
+        if [ -z "$task" ]; then
+            # 队列为空，退出 worker
+            echo "[GPU $gpu Worker $worker_id] 队列为空，退出"
+            break
+        fi
+
+        # 解析任务（任务格式：annotation_file）
+        local annotation_file="$task"
+
+        # 检查文件是否存在
+        if [ ! -f "$annotation_file" ]; then
+            echo "[GPU $gpu Worker $worker_id] 警告: 文件不存在，跳过: $annotation_file"
+            continue
+        fi
+
+        # 提取数据集名称
+        local dataset_name=$(basename "$annotation_file" .jsonl)
+
+        # 执行推理
+        run_inference "$checkpoint" "$annotation_file" "$gpu" "$worker_id" "$ckpt_name" "$dataset_name"
+
+        # 短暂等待，避免 GPU 资源竞争
+        sleep 2
+    done
+
+    echo "[GPU $gpu Worker $worker_id] 完成所有任务"
 }
 
 # ============================================================
@@ -174,12 +282,14 @@ run_inference() {
 TOTAL_START_TIME=$(date +%s)
 
 echo "============================================================"
-echo "批量测试配置"
+echo "批量测试配置 (ver3 - 支持每 GPU 多任务并行)"
 echo "============================================================"
 echo "Checkpoints 数量: ${#CHECKPOINTS[@]}"
 echo "测试集数量: ${#ANNOTATION_FILES[@]}"
 echo "可用 GPU 数量: ${#GPUS[@]}"
 echo "可用 GPUs: ${GPUS[*]}"
+echo "每 GPU 并行任务数: $TASKS_PER_GPU"
+echo "总并行度: $((${#GPUS[@]} * TASKS_PER_GPU))"
 echo "样本模式: $([ "$NUM_SAMPLES" -eq -1 ] && echo '全部样本' || echo "前 $NUM_SAMPLES 个样本")"
 echo "============================================================"
 echo ""
@@ -191,56 +301,6 @@ echo ""
 
 # 可用 GPU 数量
 NUM_GPUS=${#GPUS[@]}
-
-# 为每个 GPU 创建任务处理函数（顺序执行分配给它的任务）
-process_gpu_tasks() {
-    local gpu=$1
-    local gpu_idx=$2
-    local checkpoint=$3
-    local ckpt_name=$4
-
-    # 该 GPU 需要处理的任务列表
-    local tasks_for_this_gpu=()
-
-    # 按轮询方式分配任务给该 GPU
-    for ((i=gpu_idx; i<${#ANNOTATION_FILES[@]}; i+=NUM_GPUS)); do
-        tasks_for_this_gpu+=("${ANNOTATION_FILES[$i]}")
-    done
-
-    # 该 GPU 的任务数量
-    local num_tasks=${#tasks_for_this_gpu[@]}
-
-    if [ $num_tasks -eq 0 ]; then
-        echo "[GPU $gpu] 无分配任务"
-        return 0
-    fi
-
-    echo "[GPU $gpu] 分配到 $num_tasks 个任务，开始顺序执行..."
-
-    # 顺序处理该 GPU 的所有任务
-    for ((task_idx=0; task_idx<num_tasks; task_idx++)); do
-        local annotation_file="${tasks_for_this_gpu[$task_idx]}"
-
-        # 检查文件是否存在
-        if [ ! -f "$annotation_file" ]; then
-            echo "[GPU $gpu] 警告: 文件不存在，跳过: $annotation_file"
-            continue
-        fi
-
-        # 提取数据集名称
-        local dataset_name=$(basename "$annotation_file" .jsonl)
-
-        echo "[GPU $gpu] 任务 $((task_idx+1))/$num_tasks: $dataset_name"
-
-        # 执行推理（前台执行，等待完成）
-        run_inference "$checkpoint" "$annotation_file" "$gpu" "$ckpt_name" "$dataset_name"
-
-        echo "[GPU $gpu] 任务 $((task_idx+1))/$num_tasks 完成，等待 GPU 清理... (5秒)"
-        sleep 5
-    done
-
-    echo "[GPU $gpu] ✓ 所有 $num_tasks 个任务完成"
-}
 
 # 遍历每个 checkpoint（按批次执行）
 for ckpt_idx in "${!CHECKPOINTS[@]}"; do
@@ -259,7 +319,7 @@ for ckpt_idx in "${!CHECKPOINTS[@]}"; do
     echo "处理 Checkpoint $((ckpt_idx+1))/${#CHECKPOINTS[@]}: $CKPT_NAME"
     echo "============================================================"
     echo "路径: $CHECKPOINT"
-    echo "任务分配模式: 每个 GPU 顺序执行其分配的任务"
+    echo "任务分配模式: 动态任务队列，每 GPU $TASKS_PER_GPU 个并行 worker"
     echo ""
 
     # 复制脚本到checkpoint输出目录以便追溯和复现
@@ -268,29 +328,51 @@ for ckpt_idx in "${!CHECKPOINTS[@]}"; do
     echo "✓ 脚本已备份到: ${BASE_OUTPUT_DIR}/${CKPT_NAME}/$(basename "$SCRIPT_PATH")"
     echo ""
 
-    # 为每个 GPU 启动一个后台任务处理函数
-    declare -a gpu_pids=()
+    # 重置统计
+    echo "0 0" > "$STATS_FILE"
+
+    # 初始化任务队列（将所有 annotation files 放入队列）
+    > "$TASK_QUEUE_FILE"
+    for annotation_file in "${ANNOTATION_FILES[@]}"; do
+        echo "$annotation_file" >> "$TASK_QUEUE_FILE"
+    done
+    echo "✓ 任务队列已初始化: ${#ANNOTATION_FILES[@]} 个任务"
+    echo ""
+
+    # 启动所有 worker 进程
+    declare -a worker_pids=()
 
     for gpu_idx in "${!GPUS[@]}"; do
         GPU="${GPUS[$gpu_idx]}"
-        echo "[GPU $GPU] 启动任务处理进程..."
 
-        # 在后台运行该 GPU 的任务处理函数
-        process_gpu_tasks "$GPU" "$gpu_idx" "$CHECKPOINT" "$CKPT_NAME" &
-        gpu_pids+=($!)
+        for ((worker_id=0; worker_id<TASKS_PER_GPU; worker_id++)); do
+            echo "[GPU $GPU] 启动 Worker $worker_id..."
 
-        sleep 2  # 避免同时启动
+            # 在后台启动 worker
+            worker_process "$GPU" "$worker_id" "$CHECKPOINT" "$CKPT_NAME" &
+            worker_pids+=($!)
+
+            # 稍微错开启动时间，避免同时启动造成资源竞争
+            sleep 1
+        done
     done
 
-    # 等待所有 GPU 完成其任务
     echo ""
-    echo "等待所有 GPU 完成其任务..."
-    for pid in "${gpu_pids[@]}"; do
+    echo "共启动 ${#worker_pids[@]} 个 worker 进程"
+    echo "等待所有任务完成..."
+    echo ""
+
+    # 等待所有 worker 完成
+    for pid in "${worker_pids[@]}"; do
         wait $pid
     done
 
+    # 读取统计信息
+    read completed failed < "$STATS_FILE"
+
     echo ""
     echo "✓✓ Checkpoint $CKPT_NAME 的所有任务完成"
+    echo "   成功: $completed, 失败: $failed"
     echo ""
 
     # Checkpoint 间等待，确保显存完全释放
@@ -310,6 +392,9 @@ TOTAL_DURATION=$((TOTAL_END_TIME - TOTAL_START_TIME))
 HOURS=$((TOTAL_DURATION / 3600))
 MINUTES=$(((TOTAL_DURATION % 3600) / 60))
 SECONDS=$((TOTAL_DURATION % 60))
+
+# 最终统计
+read COMPLETED_TASKS FAILED_TASKS < "$STATS_FILE"
 
 echo ""
 echo "============================================================"

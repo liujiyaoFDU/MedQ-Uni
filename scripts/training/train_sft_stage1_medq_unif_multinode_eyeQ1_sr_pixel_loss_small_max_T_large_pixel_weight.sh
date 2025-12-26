@@ -55,8 +55,8 @@ MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/m
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
 
-TOTAL_STEPS=24000
-SAVE_EVERY=4000
+TOTAL_STEPS=12000
+SAVE_EVERY=2000
 LOG_EVERY=1
 
 LEARNING_RATE=2.5e-6
@@ -70,7 +70,7 @@ MSE_WEIGHT=1
 
 # Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
 # NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=1000
+PIXEL_LOSS_WEIGHT=10000
 PIXEL_LOSS_TYPE="l2"
 
 PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
