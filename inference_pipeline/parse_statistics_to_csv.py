@@ -27,14 +27,14 @@ import pandas as pd
 # Default input directories to search (used if --directories is not specified)
 # Modify these paths according to your project structure
 DEFAULT_INPUT_DIRECTORIES = [
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_ver1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_0004000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_ver1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0004000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_ver1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0006000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_ver1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0008000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_ver1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0010000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_pixel_weight_10000_0010000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_pixel_weight_10000_0008000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_pixel_weight_10000_0006000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_pixel_weight_10000_0004000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_0020000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_0016000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_train_pixel_loss_l2_50_eye_0_5_max_T_lr_2_5e-6_pixel_weight_10_ver2/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6_0012000"
 ]
-
-
 
 
 
