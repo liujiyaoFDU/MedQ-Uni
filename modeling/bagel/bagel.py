@@ -21,13 +21,14 @@ from transformers.modeling_utils import PreTrainedModel
 logger = logging.getLogger(__name__)
 
 from data.data_utils import (
-    create_sparse_mask, 
-    get_flattened_position_ids_extrapolate, 
+    create_sparse_mask,
+    get_flattened_position_ids_extrapolate,
     get_flattened_position_ids_interpolate,
-    patchify, 
+    patchify,
 )
 from .qwen2_navit import NaiveCache
 from .modeling_utils import MLPconnector, TimestepEmbedder, PositionEmbedding
+from .losses import compute_ce_loss, compute_mse_loss, compute_pixel_loss
 
 from tqdm import tqdm
 
@@ -364,340 +365,53 @@ class Bagel(PreTrainedModel):
             noise_tokens = noise  # 对应的噪声 ε（与 z0 同形状）
             t_tokens_all = packed_timesteps  # 每个 token 的时间步 t
 
-            velocity_pred = self.llm2vae(last_hidden_state[mse_loss_indexes])  # 模型预测的速度 v̂（≈ ε - z0）
-            velocity_target = noise_tokens - z0_tokens_clean  # 真实速度 v = ε - z0
-            supervise_mask = t_tokens_all > 0  # 标记哪些 token (t>0) 需要 MSE 监督
-            mse = (velocity_pred - velocity_target[supervise_mask]) ** 2  # 逐元素平方误差
+            # Compute MSE loss using modular function
+            mse = compute_mse_loss(
+                last_hidden_state=last_hidden_state,
+                mse_loss_indexes=mse_loss_indexes,
+                llm2vae=self.llm2vae,
+                packed_latent_clean=z0_tokens_clean,
+                noise=noise_tokens,
+                packed_timesteps=t_tokens_all,
+            )
 
             # Optional pixel-space fidelity loss (for paired restoration tasks such as SR/denoise).
-            # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
+            # This uses the VAE decoder as a differentiable projector: ẑ0 -> x̂0, then apply L1/L2 in pixel space.
 
-            # ========== Pixel Loss Entry Diagnostics ==========
-            pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}  # 环境变量控制调试输出
-            pixel_loss_debug_verbose = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE", "").lower() in {"1", "true", "yes", "y"}  # 更详细的调试输出（可能较多）
-            if pixel_loss_debug and self.training and pixel_loss_weight > 0:  # 仅在训练且权重大于 0 时打印调试信息
-                if dist.get_rank() == 0:
-                    logger.info("="*60)
-                    logger.info("[Pixel Loss Entry] Checking entry conditions")
-                    logger.info(f"  pixel_loss_weight={pixel_loss_weight}")
-                    logger.info(f"  pixel_loss_max_t={pixel_loss_max_t}")
-                    logger.info(f"  padded_images is None: {padded_images is None}")
-                    logger.info(f"  self.vae_model is None: {self.vae_model is None}")
-                    logger.info(f"  patchified_vae_latent_shapes is None: {patchified_vae_latent_shapes is None}")
-                    logger.info(f"  packed_vae_token_indexes is None: {packed_vae_token_indexes is None}")
-                    logger.info(f"  packed_timesteps is None: {packed_timesteps is None}")
-                    if patchified_vae_latent_shapes is not None:
-                        logger.info(f"  len(patchified_vae_latent_shapes)={len(patchified_vae_latent_shapes)}")
-                    logger.info("="*60)
-            # ===================================================
+            # Compute pixel loss using modular function
+            pixel = compute_pixel_loss(
+                last_hidden_state=last_hidden_state,
+                mse_loss_indexes=mse_loss_indexes,
+                llm2vae=self.llm2vae,
+                packed_latent_clean=z0_tokens_clean,
+                noise=noise_tokens,
+                packed_timesteps=t_tokens_all,
+                padded_images=padded_images,
+                patchified_vae_latent_shapes=patchified_vae_latent_shapes,
+                packed_vae_token_indexes=packed_vae_token_indexes,
+                vae_decode_fn=self.vae_decode,
+                latent_patch_size=self.latent_patch_size,
+                latent_channel=self.latent_channel,
+                latent_downsample=self.latent_downsample,
+                pixel_loss_weight=pixel_loss_weight,
+                pixel_loss_type=pixel_loss_type,
+                pixel_loss_max_t=pixel_loss_max_t,
+                is_training=self.training,
+            )
 
-            if (
-                self.training  # 仅训练时计算像素损失
-                and pixel_loss_weight > 0  # 需设置权重
-                and pixel_loss_max_t > 0  # 需有时间步阈值
-                and padded_images is not None  # 需提供原始图像
-                and self.vae_model is not None  # 需有 VAE 解码器
-                and patchified_vae_latent_shapes is not None  # 需有每张图的 patch 形状
-                and packed_vae_token_indexes is not None  # 需有 VAE token 索引
-                and packed_timesteps is not None  # 需有时间步
-                and len(patchified_vae_latent_shapes) > 0  # 至少一张图
-            ):
-                rank = dist.get_rank() if dist.is_initialized() else 0
-                if pixel_loss_debug:
-                    logger.info(f"++ [Pixel Loss Entry] rank={rank} conditions met")
-                # Ensure (has_mse tokens) align with mse_loss_indexes predictions.
-                if velocity_pred.shape[0] == int(supervise_mask.sum().item()):  # 确保预测数量与需要计算的 token 数一致
-                    # Build per-token prediction of clean latent z0: ẑ0 = zt - t * v̂, with zt = (1-t)z0 + tε.
-                    # Here v̂ ≈ (ε - z0) is the rectified-flow "velocity" target.
-                    t_tokens_supervised = t_tokens_all[supervise_mask].to(z0_tokens_clean.dtype)  # 仅取监督位置的时间步
-                    z0_tokens_pred = z0_tokens_clean[supervise_mask] + t_tokens_supervised[:, None] * (velocity_target[supervise_mask] - velocity_pred)  # 用预测速度恢复估计的 z0
-
-                    z0_tokens_hybrid = z0_tokens_clean.clone()  # 基于预测速度的 z0 估计
-                    z0_tokens_hybrid[supervise_mask] = z0_tokens_pred  # 仅覆盖监督位置
-
-                    # Compute per-image timestep (constant within an image).
-                    tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]  # 统计每张图的 token 数
-                    total_tokens_expected = sum(tokens_per_image)  # 总 token 数用于校验
-                    if total_tokens_expected == z0_tokens_hybrid.shape[0]:  # 校验 token 总数匹配
-                        device = z0_tokens_hybrid.device
-                        tokens_per_image_t = torch.tensor(tokens_per_image, device=device, dtype=torch.long)  # 构造张量形式
-                        image_start_ptrs = torch.cat(
-                            [torch.zeros(1, device=device, dtype=torch.long), tokens_per_image_t.cumsum(0)[:-1]],
-                            dim=0,
-                        )  # 计算每张图的起始偏移
-
-                        # First timestep per image.
-                        t_img = t_tokens_all[image_start_ptrs].to(z0_tokens_clean.dtype)  # 获取每张图的时间步（第一 token）
-
-                        # Optional: verify mapping between (VAE token order) and (sequence positions) + mse mask.
-                        # 需要 pixel_loss_debug 同时开启，确保 logger/dist 已初始化。
-                        if pixel_loss_debug and pixel_loss_debug_verbose:
-                            max_verbose_env = os.environ.get("PIXEL_LOSS_DEBUG_VERBOSE_MAX", "5")
-                            try:
-                                max_verbose = int(max_verbose_env)
-                            except Exception:
-                                max_verbose = 5
-                            verbose_reports = int(getattr(self, "_pixel_loss_verbose_reports", 0))
-                            if verbose_reports < max_verbose:
-                                setattr(self, "_pixel_loss_verbose_reports", verbose_reports + 1)
-
-                                vae_seq_pos = packed_vae_token_indexes  # (num_vae_tokens,) 每个 VAE token 在 packed_sequence 中的位置
-                                is_sorted = bool(torch.all(vae_seq_pos[1:] >= vae_seq_pos[:-1]).item()) if vae_seq_pos.numel() > 1 else True
-                                mse_kind = "none"
-                                mse_count = -1
-                                mse_min = -1
-                                mse_max = -1
-                                if mse_loss_indexes is not None:
-                                    if mse_loss_indexes.dtype == torch.bool:
-                                        mse_kind = "mask"
-                                        mse_count = int(mse_loss_indexes.sum().item())
-                                        mse_seq_pos = torch.nonzero(mse_loss_indexes, as_tuple=False).squeeze(-1)
-                                    else:
-                                        # 在本项目里 mse_loss_indexes 往往是 “sequence 位置索引列表”，不是 bool mask。
-                                        mse_kind = "indices"
-                                        mse_seq_pos = mse_loss_indexes.to(device=device, dtype=torch.long).view(-1)
-                                        mse_count = int(mse_seq_pos.numel())
-                                    if mse_seq_pos.numel() > 0:
-                                        mse_min = int(mse_seq_pos.min().item())
-                                        mse_max = int(mse_seq_pos.max().item())
-
-                                logger.info(
-                                    f"[Pixel Loss Debug] mapping_check rank={int(dist.get_rank())} "
-                                    f"total_vae_tokens={int(vae_seq_pos.numel())} expected={int(total_tokens_expected)} "
-                                    f"vae_seq_pos(min/max)={int(vae_seq_pos.min().item())}/{int(vae_seq_pos.max().item())} "
-                                    f"sorted={is_sorted} "
-                                    f"supervised_tokens={int(supervise_mask.sum().item())} "
-                                    f"mse_loss_indexes(kind={mse_kind},count={mse_count},min/max={mse_min}/{mse_max})"
-                                )
-
-                                # 校验：mse_loss_indexes 是否等于 “VAE tokens 中 t>0 的那一部分” 对应的 sequence 位置集合
-                                if mse_loss_indexes is not None and mse_kind != "none":
-                                    expected_mse_seq_pos = vae_seq_pos[supervise_mask]
-                                    same_count = int(mse_seq_pos.numel()) == int(expected_mse_seq_pos.numel())
-                                    same_set = False
-                                    if same_count:
-                                        mse_sorted = torch.sort(mse_seq_pos).values
-                                        expected_sorted = torch.sort(expected_mse_seq_pos).values
-                                        same_set = bool(torch.equal(mse_sorted, expected_sorted))
-                                    if (not same_set) and dist.get_rank() == 0:
-                                        logger.warning(
-                                            "[Pixel Loss Debug] mse_loss_indexes does not match expected supervised VAE token positions; "
-                                            "this suggests sequence packing / timestep-mask misalignment."
-                                        )
-
-                        # Target images are those with t>0 (conditioning images use t=0 via -inf sentinel).
-                        # NOTE: paired-sample detection is intentionally omitted here; enable pixel loss only
-                        # when the training data is guaranteed to be paired.
-                        image_is_target = t_img > 0  # t>0 视为目标图（参与像素损失）
-
-                        # Weight only low-noise steps (high SNR): linear ramp w(t) = max(0, (t_max - t)/t_max).
-                        w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)  # 初始化每图权重
-                        w_img[image_is_target] = torch.clamp(
-                            (float(pixel_loss_max_t) - t_img[image_is_target]) / float(pixel_loss_max_t),
-                            min=0.0,
-                            max=1.0,
-                        )  # 对目标图按时间步线性衰减
-
-                        selected = w_img > 0  # 选择权重大于 0 的图
-
-                        # Debug summary (rank 0 only).
-                        if pixel_loss_debug:
-                            if dist.get_rank() == 0:
-                                logger.info(
-                                    f"[Pixel Loss Debug] images={len(t_img)} target={int(image_is_target.sum().item())} "
-                                    f"selected(w>0)={int(selected.sum().item())} "
-                                    f"t_img(min/mean/max)={t_img.min().item():.4f}/{t_img.mean().item():.4f}/{t_img.max().item():.4f}"
-                                )
-                                if bool(selected.any().item()):
-                                    logger.info(
-                                        f"[Pixel Loss Debug] w_img(min/mean/max)={w_img[selected].min().item():.4f}/"
-                                        f"{w_img[selected].mean().item():.4f}/{w_img[selected].max().item():.4f} "
-                                        f"pixel_loss_max_t={float(pixel_loss_max_t):.4f}"
-                                    )
-
-                        if bool(selected.any().item()):  # 若有被选中的图，继续计算像素损失
-                            p = self.latent_patch_size  # patch 尺寸
-                            c = self.latent_channel  # 潜通道数
-                            vae_downsample = self.latent_downsample // p  # 解码后下采样系数（考虑 patch）
-
-                            # Collect predicted latents + GT images for selected images (variable sizes).
-                            pred_latents = []  # 选中图的预测潜特征
-                            gt_images = []  # 选中图的 GT
-                            weights = []  # 选中图的权重
-
-                            if pixel_loss_debug and dist.get_rank() == 0:
-                                selected_idx = torch.nonzero(selected).squeeze(-1).tolist()
-                                logger.info(
-                                    f"[Pixel Loss Debug] selected_idx={selected_idx} "
-                                    f"tokens_per_image={tokens_per_image} "
-                                    f"w_img_selected={[w_img[i].item() for i in selected_idx]}"
-                                )
-
-                            token_ptr = 0
-                            for img_idx, (h, w) in enumerate(patchified_vae_latent_shapes):  # 遍历每张图
-                                num_img_tokens = h * w  # 当前图 token 数
-                                if bool(selected[img_idx].item()):  # 若该图被选中
-                                    tok = z0_tokens_hybrid[token_ptr : token_ptr + num_img_tokens]  # 取出对应 token
-                                    tok = tok.view(h, w, p, p, c)  # 还原为 (h, w, p, p, c)
-                                    latent = torch.einsum("hwpqc->chpwq", tok).reshape(c, h * p, w * p)  # 调整维度得到潜特征图
-                                    pred_latents.append(latent)  # 收集预测潜特征
-
-                                    H_img = h * self.latent_downsample  # 还原图像高度
-                                    W_img = w * self.latent_downsample  # 还原图像宽度
-                                    gt_images.append(padded_images[img_idx, :, :H_img, :W_img])  # 截取对应大小的 GT 图
-                                    weights.append(w_img[img_idx])  # 记录权重
-
-                                    if pixel_loss_debug and dist.get_rank() == 0:
-                                        seq_slice = packed_vae_token_indexes[token_ptr : token_ptr + num_img_tokens]
-                                        seq_min = int(seq_slice.min().item()) if seq_slice.numel() > 0 else -1
-                                        seq_max = int(seq_slice.max().item()) if seq_slice.numel() > 0 else -1
-                                        logger.info(
-                                            f"[Pixel Loss Debug] img_idx={img_idx} token_ptr={token_ptr} "
-                                            f"tok_shape={tok.shape} latent_shape={latent.shape} "
-                                            f"gt_shape={(H_img, W_img)} "
-                                            f"weight={w_img[img_idx].item():.4f} "
-                                            f"vae_seq_pos(min/max)={seq_min}/{seq_max}"
-                                        )
-                                token_ptr += num_img_tokens  # 移动全局 token 指针
-
-                            if len(pred_latents) > 0:  # 若有需要解码的潜特征
-                                # Pad latents/images to the max size for a single batched decode.
-                                max_h_lat = max(z.shape[1] for z in pred_latents)  # 最大潜特征高度
-                                max_w_lat = max(z.shape[2] for z in pred_latents)  # 最大潜特征宽度
-                                max_h_img = max_h_lat * vae_downsample  # 对应最大图像高度
-                                max_w_img = max_w_lat * vae_downsample  # 对应最大图像宽度
-
-                                latent_batch = z0_tokens_hybrid.new_zeros((len(pred_latents), c, max_h_lat, max_w_lat))  # 构造潜特征批次并零填充
-                                gt_batch = padded_images.new_zeros((len(gt_images), padded_images.shape[1], max_h_img, max_w_img))  # 构造 GT 批次并零填充
-                                mask = padded_images.new_zeros((len(gt_images), 1, max_h_img, max_w_img))  # 同尺寸权重掩码
-
-                                if pixel_loss_debug and dist.get_rank() == 0:
-                                    logger.info(
-                                        f"[Pixel Loss Debug] batch_shapes latent_batch={latent_batch.shape} "
-                                        f"gt_batch={gt_batch.shape} mask={mask.shape} "
-                                        f"max_h_lat={max_h_lat} max_w_lat={max_w_lat} "
-                                        f"max_h_img={max_h_img} max_w_img={max_w_img}"
-                                    )
-
-                                for i, (z, x_gt, w_i) in enumerate(zip(pred_latents, gt_images, weights)):  # 填充批次
-                                    H_lat, W_lat = z.shape[1], z.shape[2]
-                                    H_img, W_img = x_gt.shape[1], x_gt.shape[2]
-                                    latent_batch[i, :, :H_lat, :W_lat] = z  # 填入潜特征
-                                    gt_batch[i, :, :H_img, :W_img] = x_gt  # 填入 GT 图
-                                    mask[i, :, :H_img, :W_img] = w_i.to(mask.dtype)  # 填入权重掩码
-
-                                x_pred = self.vae_decode(latent_batch)  # VAE 解码预测图像
-                                x_pred = x_pred[:, :, :max_h_img, :max_w_img]  # 裁剪到填充尺寸
-                                gt_batch = gt_batch.to(x_pred.dtype)  # 对齐数据类型
-
-                                # Compute loss in [0,1] pixel space (consistent with inference saving path),
-                                # which avoids extreme out-of-range decoder outputs exploding L2.
-                                # NOTE: clamp 不会修复 NaN；若出现 NaN/Inf 需要额外诊断。
-                                x_pred_01 = (x_pred * 0.5 + 0.5).clamp(0, 1)  # 将预测值映射到 [0,1]
-                                gt_batch_01 = (gt_batch * 0.5 + 0.5).clamp(0, 1)  # 将 GT 映射到 [0,1]
-
-                                if pixel_loss_type.lower() in {"l2", "mse"}:  # 选择 L2/MSE 或 L1
-                                    diff = (x_pred_01 - gt_batch_01) ** 2  # L2 差
-                                else:
-                                    diff = (x_pred_01 - gt_batch_01).abs()  # L1 差
-
-                                denom = mask.sum() * x_pred_01.shape[1]  # 归一化系数：有效像素数 × 通道数
-                                # === Critical fix: Protect against very small denom causing explosion ===
-                                # If denom is too small (e.g. < 1e-3), division can produce huge values (e.g. 4e12).
-                                # This can happen when mask is nearly all zeros (very few valid pixels).
-                                MIN_DENOM = 1e-3  # 设置最小分母阈值，防止除法爆炸
-                                rank = dist.get_rank() if dist.is_initialized() else 0
-                                if float(denom.item()) > MIN_DENOM:  # denom 足够大，正常计算
-                                    if pixel_loss_debug:
-                                        logger.info(f"++ [Pixel Loss Normal] rank={rank} denom={float(denom.item()):.6g}")
-                                    pixel = (diff * mask).sum() / denom  # 加权求和并归一化得到像素损失
-                                else:  # denom 过小，设置 pixel = 0 并记录警告
-                                    logger.warning(f"++ [Pixel Loss Small] rank={rank} denom={float(denom.item()):.6g} < {MIN_DENOM}, setting pixel=0")
-                                    if pixel_loss_debug:
-                                        logger.warning(
-                                            f"[Pixel Loss] rank={int(dist.get_rank())} "
-                                            f"denom too small: {float(denom.item()):.6g} (< {MIN_DENOM}), "
-                                            f"setting pixel=0 to prevent explosion"
-                                        )
-                                    pixel = torch.tensor(0.0, device=diff.device, dtype=diff.dtype)
-                                if pixel_loss_debug:
-                                    logger.info(f"++ [Pixel Loss Exit] rank={rank} pixel={float(pixel.item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
-
-                                # === Abnormal value diagnostics ===
-                                # 对于 L1/L2（在 [0,1] 空间）理论上 pixel 应该在 [0,1] 范围内；
-                                # 若出现巨大的 pixel（例如 1e11），说明存在 NaN/Inf、dtype/广播异常或 mask/denom 异常。
-                                # 异常情况可能只发生在某个 rank 的某个样本上，因此这里不要只限制 rank0，
-                                # 否则分布式训练时会"看不到"非 rank0 上的爆炸根因。
-                                if pixel_loss_debug:
-                                    rank = dist.get_rank() if dist.is_initialized() else 0
-                                    logger.warning(f"++ [Pixel Loss Abnormal] rank={rank} checking pixel={float(pixel.detach().float().item()):.6g} shape={pixel.shape} dtype={pixel.dtype}")
-                                    pixel_scalar = float(pixel.detach().float().item())
-                                    if (not torch.isfinite(pixel.detach()).all().item()) or pixel_scalar > 1.01:
-                                        max_reports_env = os.environ.get("PIXEL_LOSS_DEBUG_ABNORMAL_MAX", "10")
-                                        logger.debug(f"++ [Pixel Loss Debug] rank={rank} max_reports_env={max_reports_env}")
-                                        try:
-                                            max_reports = int(max_reports_env)
-                                        except Exception:
-                                            max_reports = 10
-                                        reported = int(getattr(self, "_pixel_loss_abnormal_reports", 0))
-                                        if reported >= max_reports:
-                                            # 避免日志刷屏：超过次数后不再打印详细统计
-                                            pass
-                                        else:
-                                            setattr(self, "_pixel_loss_abnormal_reports", reported + 1)
-
-                                        def _stat(t: torch.Tensor):
-                                            t_f = t.detach().float()
-                                            return (
-                                                f"shape={tuple(t.shape)} dtype={t.dtype} "
-                                                f"finite={bool(torch.isfinite(t_f).all().item())} "
-                                                f"min={float(t_f.min().item()):.6g} "
-                                                f"mean={float(t_f.mean().item()):.6g} "
-                                                f"max={float(t_f.max().item()):.6g}"
-                                            )
-
-                                        if reported < max_reports:
-                                            logger.warning("=" * 80)
-                                            logger.warning("[Pixel Loss Abnormal] pixel value out of expected range")
-                                            logger.warning(f"  rank={int(dist.get_rank())}")
-                                            logger.warning(f"  pixel={pixel_scalar:.6g} pixel_loss_type={pixel_loss_type} pixel_loss_max_t={float(pixel_loss_max_t):.6g}")
-                                            logger.warning(f"  denom={float(denom.detach().float().item()):.6g} mask_sum={float(mask.detach().float().sum().item()):.6g} C={int(x_pred_01.shape[1])}")
-                                            logger.warning(
-                                                f"  token_mapping total_tokens_expected={int(total_tokens_expected)} "
-                                                f"packed_vae_token_indexes={int(packed_vae_token_indexes.numel())} "
-                                                f"tokens_per_image_sum={int(sum(tokens_per_image))} images={len(tokens_per_image)}"
-                                            )
-                                            logger.warning(
-                                                f"  masks supervised_tokens={int(supervise_mask.sum().item())} "
-                                                f"mse_loss_indexes_sum={int(mse_loss_indexes.sum().item()) if mse_loss_indexes is not None else -1}"
-                                            )
-                                            logger.warning(f"  x_pred: {_stat(x_pred)}")
-                                            logger.warning(f"  gt_batch: {_stat(gt_batch)}")
-                                            logger.warning(f"  x_pred_01: {_stat(x_pred_01)}")
-                                            logger.warning(f"  gt_batch_01: {_stat(gt_batch_01)}")
-                                            logger.warning(f"  diff: {_stat(diff)}")
-                                            logger.warning(f"  mask: {_stat(mask)}")
-                                            logger.warning(
-                                                f"  t_img(min/mean/max)={float(t_img.min().item()):.6g}/"
-                                                f"{float(t_img.mean().item()):.6g}/{float(t_img.max().item()):.6g} "
-                                                f"selected={int(selected.sum().item())}/{len(selected)}"
-                                            )
-                                            logger.warning("=" * 80)
-                        else:
-                            # 无图进入像素损失时，直接返回 0，避免 pixel=None 污染后续 all_reduce
-                            if pixel_loss_debug and dist.get_rank() == 0:
-                                logger.info("++ [Pixel Loss Skip] selected==0, setting pixel=0")
-                            pixel = torch.tensor(0.0, device=z0_tokens_hybrid.device, dtype=z0_tokens_hybrid.dtype)
-
-
-        ce = None
-        if ce_loss_indexes is not None:
-            packed_ce_preds = self.language_model.lm_head(last_hidden_state[ce_loss_indexes])
-            ce = F.cross_entropy(packed_ce_preds, packed_label_ids, reduction="none")
+        # Compute CE loss using modular function
+        ce = compute_ce_loss(
+            last_hidden_state=last_hidden_state,
+            ce_loss_indexes=ce_loss_indexes,
+            packed_label_ids=packed_label_ids,
+            lm_head=self.language_model.lm_head,
+        )
 
         # === Final safety check: Ensure pixel value is in valid range ===
         # This is the last line of defense before returning the loss dict.
         # If pixel is abnormal (NaN/Inf or >1.0), we clamp it to 0 to prevent contaminating training.
+        # NOTE: This check is also performed inside compute_pixel_loss(), but we keep this as a final safeguard.
+        pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
         if pixel is not None:
             rank = dist.get_rank() if dist.is_initialized() else 0
             if pixel_loss_debug:
@@ -713,6 +427,7 @@ class Bagel(PreTrainedModel):
 
         result = dict(mse=mse, ce=ce, pixel=pixel)
         if pixel_loss_debug:
+            rank = dist.get_rank() if dist.is_initialized() else 0
             logger.info(f"++ [Pixel Loss Final Check] rank={rank} result:{result}")
 
         shapes = []
