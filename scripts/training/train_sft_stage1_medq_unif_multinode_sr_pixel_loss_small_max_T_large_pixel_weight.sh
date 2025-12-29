@@ -52,21 +52,21 @@ SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project
 
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0004000"
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly.yaml"
 
 # 训练参数配置 ） / Training parameters
-TOTAL_STEPS=44000         # 总训练步数 / Total training steps
+TOTAL_STEPS=36000         # 总训练步数 / Total training steps
 # SAVE_EVERY=20  
-SAVE_EVERY=6000           
+SAVE_EVERY=4000           
 LOG_EVERY=1   
 
 LEARNING_RATE=2.5e-6
 
-EXPECTED_NUM_TOKENS=18000
-MAX_NUM_TOKENS=20000
-MAX_NUM_TOKENS_PER_SAMPLE=18000
+EXPECTED_NUM_TOKENS=12000
+MAX_NUM_TOKENS=14000
+MAX_NUM_TOKENS_PER_SAMPLE=11000
 
 CE_WEIGHT=0.25
 MSE_WEIGHT=1
@@ -210,7 +210,7 @@ torchrun \
   --resume_model_only False \
   --resume_model_optimizer True \
   --finetune_from_hf True \
-  --finetune_from_ema True \
+  --finetune_from_ema False \
   --auto_resume True \
   --wandb_name "${EXP_NAME}" \
   --layer_module Qwen2MoTDecoderLayer \

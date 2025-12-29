@@ -50,27 +50,30 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
+# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
 
-CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly.yaml"
 
-TOTAL_STEPS=24000
-SAVE_EVERY=4000
-LOG_EVERY=1
+# 训练参数配置 ） / Training parameters
+TOTAL_STEPS=36000         # 总训练步数 / Total training steps
+# SAVE_EVERY=20  
+SAVE_EVERY=4500           
+LOG_EVERY=1   
 
 LEARNING_RATE=2.5e-6
 
-EXPECTED_NUM_TOKENS=18000
-MAX_NUM_TOKENS=20000
-MAX_NUM_TOKENS_PER_SAMPLE=18000
+EXPECTED_NUM_TOKENS=14000
+MAX_NUM_TOKENS=16000
+MAX_NUM_TOKENS_PER_SAMPLE=10000
 
 CE_WEIGHT=0.25
 MSE_WEIGHT=1
 
 # Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
 # NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=1000
+PIXEL_LOSS_WEIGHT=10000
 PIXEL_LOSS_TYPE="l2"
 
 PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
@@ -90,7 +93,7 @@ export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6}"  # Experiment name
+EXP_NAME="${1:-stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6}"  # Experiment name
 NUM_GPUS="${2:-8}"
 MASTER_PORT="${3:-23456}"
 
@@ -204,10 +207,10 @@ torchrun \
   --checkpoint_dir "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/${EXP_NAME}" \
   --model_path "${MODEL_PATH}" \
   --resume_from  "${MODEL_PATH}" \
-  --resume_model_only True \
-  --resume_model_optimizer False \
+  --resume_model_only False \
+  --resume_model_optimizer True \
   --finetune_from_hf True \
-  --finetune_from_ema False \
+  --finetune_from_ema True \
   --auto_resume True \
   --wandb_name "${EXP_NAME}" \
   --layer_module Qwen2MoTDecoderLayer \

@@ -43,7 +43,7 @@ MedicalImageEditingIterableDataset_ver1:
   image_transform_args:
     image_stride: 16
     max_image_size: 1024
-    min_image_size: 256
+    min_image_size: 128
 
   # ViT image transformation parameters
   vit_image_transform_args:
