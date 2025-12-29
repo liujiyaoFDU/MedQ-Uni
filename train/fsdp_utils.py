@@ -535,14 +535,14 @@ def fsdp_wrapper(original_model, fsdp_config, ignored_modules=[]):
 class FSDPCheckpoint:
     @staticmethod
     def fsdp_save_ckpt(
-        ckpt_dir, 
-        train_steps, 
-        model, 
-        ema_model, 
-        optimizer, 
-        scheduler, 
+        ckpt_dir,
+        train_steps,
+        model,
+        ema_model,
+        optimizer,
+        scheduler,
         data_status,
-        logger, 
+        logger,
         fsdp_config,
         # New parameters for saving complete inference files (backward compatible)
         tokenizer=None,
@@ -550,6 +550,7 @@ class FSDPCheckpoint:
         model_args=None,
         data_args=None,
         training_args=None,
+        **kwargs  # Accept additional parameters like tensorboard_run_name
     ):
         save_path = os.path.join(ckpt_dir, f"{train_steps:07d}")
         os.makedirs(save_path, exist_ok=True)
@@ -683,7 +684,8 @@ class FSDPCheckpoint:
 
         if dist.get_rank() == 0:
             FSDPCheckpoint._save_inference_files(
-                save_path, model, tokenizer, vae_model, model_args, data_args, training_args, logger
+                save_path, model, tokenizer, vae_model, model_args, data_args, training_args, logger,
+                train_steps=train_steps, **kwargs
             )
 
         if torch.cuda.is_available() and logger is not None and logger.isEnabledFor(logging.DEBUG):
@@ -697,31 +699,84 @@ class FSDPCheckpoint:
         return
 
     @staticmethod
-    def _save_inference_files(save_path, model, tokenizer, vae_model, model_args, data_args, training_args, logger):
+    def _save_inference_files(save_path, model, tokenizer, vae_model, model_args, data_args, training_args, logger, train_steps=0, **kwargs):
         """Save complete file structure needed for inference"""
         try:
             logger.info("Saving inference files...")
-            
-            if hasattr(model, 'language_model') and hasattr(model.language_model, 'config'):
-                llm_config = model.language_model.config
-                llm_config_dict = llm_config.to_dict()
-                with open(os.path.join(save_path, "llm_config.json"), 'w') as f:
-                    json.dump(llm_config_dict, f, indent=2)
-                logger.debug("Saved llm_config.json")
 
-            if hasattr(model, 'vit_model') and hasattr(model.vit_model, 'config'):
-                vit_config = model.vit_model.config
-                vit_config_dict = vit_config.to_dict()
-                with open(os.path.join(save_path, "vit_config.json"), 'w') as f:
-                    json.dump(vit_config_dict, f, indent=2)
-                logger.debug("Saved vit_config.json")
+            # Helper function to get underlying model from FSDP/DDP wrapper
+            def get_underlying_model(m):
+                """Extract underlying model from FSDP/DDP wrappers"""
+                if m is None:
+                    return None
+                # Handle FSDP
+                if hasattr(m, '_fsdp_wrapped_module'):
+                    return get_underlying_model(m._fsdp_wrapped_module)
+                # Handle DDP
+                if hasattr(m, 'module'):
+                    return get_underlying_model(m.module)
+                return m
+
+            underlying_model = get_underlying_model(model)
+
+            # Try to save llm_config.json
+            llm_config_saved = False
+            if underlying_model is not None and hasattr(underlying_model, 'language_model'):
+                lm = underlying_model.language_model
+                if hasattr(lm, 'config'):
+                    try:
+                        llm_config_dict = lm.config.to_dict()
+                        with open(os.path.join(save_path, "llm_config.json"), 'w') as f:
+                            json.dump(llm_config_dict, f, indent=2)
+                        logger.debug("Saved llm_config.json from model")
+                        llm_config_saved = True
+                    except Exception as e:
+                        logger.warning(f"Failed to serialize llm_config from model: {e}")
+
+            # Fallback: copy from model_path if not saved
+            if not llm_config_saved and model_args is not None:
+                src_path = os.path.join(model_args.model_path, "llm_config.json")
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(save_path, "llm_config.json"))
+                    logger.debug("Copied llm_config.json from model_path")
+                    llm_config_saved = True
+
+            if not llm_config_saved:
+                logger.warning("llm_config.json not saved (no source available)")
+
+            # Try to save vit_config.json
+            vit_config_saved = False
+            if underlying_model is not None and hasattr(underlying_model, 'vit_model') and underlying_model.vit_model is not None:
+                vit = underlying_model.vit_model
+                if hasattr(vit, 'config'):
+                    try:
+                        vit_config_dict = vit.config.to_dict()
+                        with open(os.path.join(save_path, "vit_config.json"), 'w') as f:
+                            json.dump(vit_config_dict, f, indent=2)
+                        logger.debug("Saved vit_config.json from model")
+                        vit_config_saved = True
+                    except Exception as e:
+                        logger.warning(f"Failed to serialize vit_config from model: {e}")
+
+            # Fallback: copy from model_path if not saved
+            if not vit_config_saved and model_args is not None:
+                src_path = os.path.join(model_args.model_path, "vit_config.json")
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(save_path, "vit_config.json"))
+                    logger.debug("Copied vit_config.json from model_path")
+                    vit_config_saved = True
+
+            if not vit_config_saved:
+                logger.warning("vit_config.json not saved (no source available)")
 
             config_dict = {}
 
-            if hasattr(model, 'config'):
+            # Use underlying_model for config access
+            config_source = underlying_model if underlying_model is not None else model
+            if hasattr(config_source, 'config'):
                 try:
-                    bagel_config_dict = model.config.to_dict() if hasattr(model.config, 'to_dict') else {}
-                    
+                    bagel_config_dict = config_source.config.to_dict() if hasattr(config_source.config, 'to_dict') else {}
+
                     def fix_vae_config(config_dict):
                         """Fix vae_config serialization issue"""
                         if isinstance(config_dict, dict):
@@ -742,18 +797,18 @@ class FSDPCheckpoint:
                                 elif isinstance(value, dict):
                                     fix_vae_config(value)
                         return config_dict
-                    
+
                     config_dict["model_config"] = fix_vae_config(bagel_config_dict)
                     logger.debug("Serialized Bagel config")
-                    
+
                 except Exception as e:
                     logger.warning(f"Unable to serialize Bagel config: {e}")
                     config_dict["model_config"] = {
-                        "visual_gen": getattr(model.config, 'visual_gen', True),
-                        "visual_und": getattr(model.config, 'visual_und', True),
-                        "latent_patch_size": getattr(model.config, 'latent_patch_size', 2),
-                        "max_latent_size": getattr(model.config, 'max_latent_size', 64),
-                        "timestep_shift": getattr(model.config, 'timestep_shift', 1.0),
+                        "visual_gen": getattr(config_source.config, 'visual_gen', True),
+                        "visual_und": getattr(config_source.config, 'visual_und', True),
+                        "latent_patch_size": getattr(config_source.config, 'latent_patch_size', 2),
+                        "max_latent_size": getattr(config_source.config, 'max_latent_size', 64),
+                        "timestep_shift": getattr(config_source.config, 'timestep_shift', 1.0),
                         "error": f"Configuration serialization failed: {str(e)}"
                     }
             
@@ -822,19 +877,54 @@ class FSDPCheckpoint:
                 json.dump(all_training_args, f, indent=2, ensure_ascii=False)
             logger.debug("Saved training_args.json")
 
+            # Save tokenizer files with fallback
+            tokenizer_saved = False
             if tokenizer:
                 try:
                     tokenizer.save_pretrained(save_path)
-                    logger.debug("Saved tokenizer files")
+                    logger.debug("Saved tokenizer files from tokenizer object")
+                    tokenizer_saved = True
                 except Exception as e:
-                    logger.warning(f"Failed to save tokenizer: {e}")
+                    logger.warning(f"Failed to save tokenizer via save_pretrained: {e}")
+
+            # Fallback: copy tokenizer files from model_path
+            if not tokenizer_saved and model_args is not None:
+                tokenizer_files = [
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vocab.json",
+                    "merges.txt",
+                    "special_tokens_map.json",
+                    "added_tokens.json",
+                ]
+                copied_count = 0
+                for tf in tokenizer_files:
+                    src = os.path.join(model_args.model_path, tf)
+                    dst = os.path.join(save_path, tf)
+                    if os.path.exists(src) and not os.path.exists(dst):
+                        try:
+                            shutil.copy2(src, dst)
+                            copied_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to copy {tf}: {e}")
+                if copied_count > 0:
+                    logger.debug(f"Copied {copied_count} tokenizer files from model_path")
+                    tokenizer_saved = True
+
+            if not tokenizer_saved:
+                logger.warning("Tokenizer files not saved (no source available)")
 
             vae_saved = False
-            
-            if hasattr(model, 'vae_model') and model.vae_model is not None:
+
+            # Check VAE in underlying model
+            has_integrated_vae = (underlying_model is not None and
+                                  hasattr(underlying_model, 'vae_model') and
+                                  underlying_model.vae_model is not None)
+
+            if has_integrated_vae:
                 try:
                     logger.debug("Saving VAE weights from integrated Bagel model...")
-                    
+
                     with FSDP.state_dict_type(
                         model,
                         StateDictType.FULL_STATE_DICT,
@@ -842,11 +932,11 @@ class FSDPCheckpoint:
                     ):
                         torch.cuda.synchronize()
                         full_state_dict = model.state_dict()
-                        
+
                         vae_saved = save_component_weights(full_state_dict, save_path, "vae_model", logger)
-                        
+
                         del full_state_dict
-                        
+
                 except Exception as e:
                     logger.warning(f"Failed to save integrated VAE weights: {e}")
             
@@ -1108,9 +1198,10 @@ class FSDPCheckpoint:
             expected_components.append('language_model')
         
         # Filter kwargs to only include parameters accepted by fsdp_save_ckpt
-        # Remove tensorboard-related parameters that are not part of the signature
+        # Include tensorboard parameters so they can be saved in training_args.json
         allowed_kwargs = {k: v for k, v in kwargs.items()
-                         if k in ['tokenizer', 'vae_model', 'model_args', 'data_args', 'training_args']}
+                         if k in ['tokenizer', 'vae_model', 'model_args', 'data_args', 'training_args',
+                                  'tensorboard_run_name', 'tensorboard_log_dir']}
 
         # Call original save function (pass directory path)
         FSDPCheckpoint.fsdp_save_ckpt(
@@ -1177,18 +1268,66 @@ class FSDPCheckpoint:
             else:
                 raise NotImplementedError
 
+            optimizer_loaded = False
             if resume_model_optimizer and os.path.exists(os.path.join(resume_from, f"optimizer.{shard_index:05d}-of-{total_shards:05d}.pt")):
                 optimizer_state_dict_path = os.path.join(
                     resume_from, f"optimizer.{shard_index:05d}-of-{total_shards:05d}.pt"
                 )
                 optimizer_state_dict = torch.load(optimizer_state_dict_path, map_location="cpu", weights_only=True)
-                optimizer.load_state_dict(optimizer_state_dict)
-                del optimizer_state_dict
 
-                scheduler_state_dict_path = os.path.join(resume_from, "scheduler.pt")
-                scheduler_state_dict = torch.load(scheduler_state_dict_path, weights_only=True, map_location="cpu")
-                scheduler.load_state_dict(scheduler_state_dict)
-                del scheduler_state_dict
+                # Check optimizer parameter group compatibility
+                saved_param_groups = optimizer_state_dict.get('param_groups', [])
+                current_param_groups = optimizer.param_groups
+
+                # Compare number of parameter groups
+                if len(saved_param_groups) != len(current_param_groups):
+                    _logger.warning(
+                        f"Optimizer parameter group count mismatch: "
+                        f"saved={len(saved_param_groups)}, current={len(current_param_groups)}. "
+                        f"Skipping optimizer state loading, will use fresh optimizer state."
+                    )
+                    del optimizer_state_dict
+                else:
+                    # Check each group's parameter count
+                    compatible = True
+                    for i, (saved_group, current_group) in enumerate(zip(saved_param_groups, current_param_groups)):
+                        saved_param_count = len(saved_group.get('params', []))
+                        current_param_count = len(current_group.get('params', []))
+                        if saved_param_count != current_param_count:
+                            _logger.warning(
+                                f"Optimizer param group {i} size mismatch: "
+                                f"saved={saved_param_count}, current={current_param_count}"
+                            )
+                            compatible = False
+                            break
+
+                    if compatible:
+                        try:
+                            optimizer.load_state_dict(optimizer_state_dict)
+                            optimizer_loaded = True
+                            _logger.info(f"Optimizer state loaded successfully from {optimizer_state_dict_path}")
+                        except Exception as e:
+                            _logger.warning(f"Failed to load optimizer state: {e}. Using fresh optimizer state.")
+                    else:
+                        _logger.warning(
+                            "Optimizer state incompatible with current model configuration. "
+                            "Using fresh optimizer state. Training will continue from step count in checkpoint."
+                        )
+                    del optimizer_state_dict
+
+                # Only load scheduler if optimizer was successfully loaded
+                if optimizer_loaded:
+                    scheduler_state_dict_path = os.path.join(resume_from, "scheduler.pt")
+                    if os.path.exists(scheduler_state_dict_path):
+                        scheduler_state_dict = torch.load(scheduler_state_dict_path, weights_only=True, map_location="cpu")
+                        try:
+                            scheduler.load_state_dict(scheduler_state_dict)
+                            _logger.info(f"Scheduler state loaded successfully")
+                        except Exception as e:
+                            _logger.warning(f"Failed to load scheduler state: {e}. Using fresh scheduler.")
+                        del scheduler_state_dict
+                else:
+                    _logger.info("Optimizer not loaded, skipping scheduler loading as well.")
 
             # Extract step number from checkpoint directory name
             checkpoint_name = os.path.basename(os.path.normpath(resume_from))

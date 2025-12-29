@@ -518,14 +518,43 @@ def main():
     logger.info(f'Model arguments {model_args}')
     logger.info(f'Data arguments {data_args}')
 
-    # Prepare resume logic (explicit resume takes priority; auto-resume is a fallback only)
+    # Prepare resume logic
+    # Priority: auto_resume (checkpoint_dir) > resume_from (explicit path)
+    # When checkpoint_dir already has checkpoints, we prioritize continuing from there
     is_resuming_from_interruption = False
     resume_from = training_args.resume_from
     resume_model_only = training_args.resume_model_only
     finetune_from_ema = False
 
-    if resume_from is not None:
-        # Explicit user-provided checkpoint → treat as a new experiment starting from that weight
+    # First check auto_resume (checkpoint_dir has highest priority)
+    if training_args.auto_resume:
+        latest_checkpoint = get_latest_ckpt(training_args.checkpoint_dir)
+        if latest_checkpoint is not None:
+            # checkpoint_dir has existing checkpoint, prioritize it
+            is_resuming_from_interruption = True
+            resume_from = latest_checkpoint
+            resume_model_only = False  # Full resume when auto-resuming
+            finetune_from_ema = False  # keep optimizer/scheduler
+            logger.info(f"🔄 Auto-resume: Found checkpoint in checkpoint_dir: {latest_checkpoint}")
+            logger.info("📋 Resume mode: CONTINUE TRAINING (from interruption)")
+            logger.info("   → Loading full training state (model + optimizer + scheduler)")
+            logger.info("   → finetune_from_ema automatically disabled")
+            logger.info("   → Note: auto_resume takes priority over resume_from")
+        elif training_args.resume_from is not None:
+            # No checkpoint in checkpoint_dir, but resume_from is specified
+            finetune_from_ema = training_args.finetune_from_ema
+            if resume_model_only:
+                mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
+            else:
+                mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
+            logger.info(f"🆕 Auto-resume: No checkpoint in {training_args.checkpoint_dir}")
+            logger.info(f"📋 Resume mode: {mode} (using resume_from as fallback)")
+            logger.info(f"   → Loading from: {resume_from}")
+        else:
+            logger.info(f"🆕 Auto-resume: No checkpoint found in {training_args.checkpoint_dir}")
+            logger.info("📋 Resume mode: FRESH START")
+    elif resume_from is not None:
+        # auto_resume is disabled, use explicit resume_from
         finetune_from_ema = training_args.finetune_from_ema
         if resume_model_only:
             mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
@@ -533,20 +562,6 @@ def main():
             mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
         logger.info(f"📋 Resume mode: {mode}")
         logger.info(f"   → Loading from: {resume_from}")
-    elif training_args.auto_resume:
-        # No explicit resume → try auto resume (true interruption recovery)
-        latest_checkpoint = get_latest_ckpt(training_args.checkpoint_dir)
-        if latest_checkpoint is not None:
-            is_resuming_from_interruption = True
-            resume_from = latest_checkpoint
-            finetune_from_ema = False  # keep optimizer/scheduler
-            logger.info(f"🔄 Auto-resume: Found checkpoint {latest_checkpoint}")
-            logger.info("📋 Resume mode: CONTINUE TRAINING (from interruption)")
-            logger.info("   → Loading full training state (model + optimizer + scheduler)")
-            logger.info("   → finetune_from_ema automatically disabled")
-        else:
-            logger.info(f"🆕 Auto-resume: No checkpoint found in {training_args.checkpoint_dir}")
-            logger.info("📋 Resume mode: FRESH START")
     else:
         logger.info("📋 Resume mode: FRESH START")
 
