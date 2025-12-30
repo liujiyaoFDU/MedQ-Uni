@@ -78,6 +78,11 @@ PIXEL_LOSS_TYPE="l2"
 
 PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
 
+# === 新增：分块 VAE decode 配置 ===
+PIXEL_LOSS_CHUNK_SIZE="${PIXEL_LOSS_CHUNK_SIZE:-2}"  # 默认 2，可通过环境变量覆盖
+PIXEL_LOSS_ADAPTIVE_CHUNK="${PIXEL_LOSS_ADAPTIVE_CHUNK:-true}"  # 自适应分块
+PIXEL_LOSS_USE_V0="${PIXEL_LOSS_USE_V0:-false}"  # 默认使用新版本
+
 EMA_DECAY=0.995
 
 # ============================================================================
@@ -180,6 +185,7 @@ echo "[INFO] Stage1 MedQ Unified Training (EyeQ1 + SR Pixel Loss)"
 echo "[CONFIG] Exp: ${EXP_NAME} | Steps: ${TOTAL_STEPS} | LR: ${LEARNING_RATE}"
 echo "[CONFIG] Nodes: ${NUM_NODES} | GPUs/node: ${NUM_GPUS} | Total GPUs: $((NUM_NODES * NUM_GPUS))"
 echo "[CONFIG] Pixel loss: w=${PIXEL_LOSS_WEIGHT} type=${PIXEL_LOSS_TYPE} max_t=${PIXEL_LOSS_MAX_T}"
+echo "[CONFIG] Chunked VAE decode: chunk_size=${PIXEL_LOSS_CHUNK_SIZE} adaptive=${PIXEL_LOSS_ADAPTIVE_CHUNK} use_v0=${PIXEL_LOSS_USE_V0}"
 if [[ "${RUNNING_ON_H_CLUSTER}" == true ]]; then
     echo "[CONFIG] Node rank: ${ACTUAL_NODE_RANK} | Master: ${ACTUAL_MASTER_ADDR}:${MASTER_PORT}"
 fi
@@ -231,6 +237,9 @@ torchrun \
   --pixel_loss_weight "${PIXEL_LOSS_WEIGHT}" \
   --pixel_loss_type "${PIXEL_LOSS_TYPE}" \
   --pixel_loss_max_t "${PIXEL_LOSS_MAX_T}" \
+  --pixel_loss_chunk_size "${PIXEL_LOSS_CHUNK_SIZE}" \
+  --pixel_loss_adaptive_chunk "${PIXEL_LOSS_ADAPTIVE_CHUNK}" \
+  --pixel_loss_use_v0 "${PIXEL_LOSS_USE_V0}" \
   --freeze_llm False \
   --freeze_vit True \
   --freeze_vae True \

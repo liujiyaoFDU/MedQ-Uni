@@ -185,6 +185,11 @@ class Bagel(PreTrainedModel):
         pixel_loss_type: str = "l1",
         pixel_loss_max_t: float = 0.0,
         pixel_loss_paired_only: bool = True,
+        # === 新增参数：分块 VAE decode ===
+        pixel_loss_chunk_size: int = 2,
+        pixel_loss_adaptive_chunk: bool = True,
+        pixel_loss_use_v0: bool = False,
+        # === 其他参数 ===
         extract_diffusion_features: bool = False,
         align_only: bool = False,
     ) -> torch.Tensor:
@@ -397,6 +402,10 @@ class Bagel(PreTrainedModel):
                 pixel_loss_type=pixel_loss_type,
                 pixel_loss_max_t=pixel_loss_max_t,
                 is_training=self.training,
+                # === 新增参数：分块 VAE decode ===
+                pixel_loss_chunk_size=pixel_loss_chunk_size,
+                pixel_loss_adaptive_chunk=pixel_loss_adaptive_chunk,
+                pixel_loss_use_v0=pixel_loss_use_v0,
             )
 
         # Compute CE loss using modular function

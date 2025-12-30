@@ -424,6 +424,34 @@ class TrainingArguments:
         metadata={"help": "Deprecated (ignored): kept for backward compatibility."}
     )
 
+    # === 新增参数：分块 VAE decode ===
+    pixel_loss_chunk_size: int = field(
+        default=2,
+        metadata={
+            "help": "Base chunk size for VAE decode (1-4 recommended). "
+                    "Lower = more memory saving, higher = faster. "
+                    "Adaptive mode will auto-adjust based on image resolution."
+        }
+    )
+
+    pixel_loss_adaptive_chunk: bool = field(
+        default=True,
+        metadata={
+            "help": "Enable adaptive chunk size based on image resolution. "
+                    "Recommended for mixed-resolution datasets. "
+                    "When True: 1024×1024→chunk=1, 512×512→chunk=2, 256×256→chunk=4."
+        }
+    )
+
+    pixel_loss_use_v0: bool = field(
+        default=False,
+        metadata={
+            "help": "Use original (v0) pixel loss implementation without chunking. "
+                    "Set to True to fallback to non-chunked version for debugging or comparison. "
+                    "Can also be controlled via PIXEL_LOSS_USE_V0 environment variable."
+        }
+    )
+
     ce_weight: float = field(
         default=1.0,
         metadata={"help": "Scaling factor for the language cross-entropy loss term."}
@@ -1170,6 +1198,10 @@ def main():
             data['pixel_loss_type'] = training_args.pixel_loss_type
             data['pixel_loss_max_t'] = training_args.pixel_loss_max_t
             data['pixel_loss_paired_only'] = training_args.pixel_loss_paired_only
+            # === 新增参数：分块 VAE decode ===
+            data['pixel_loss_chunk_size'] = training_args.pixel_loss_chunk_size
+            data['pixel_loss_adaptive_chunk'] = training_args.pixel_loss_adaptive_chunk
+            data['pixel_loss_use_v0'] = training_args.pixel_loss_use_v0
         else:
             data.pop('padded_images', None)
 
