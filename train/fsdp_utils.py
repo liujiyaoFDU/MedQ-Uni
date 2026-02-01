@@ -922,23 +922,17 @@ class FSDPCheckpoint:
                                   underlying_model.vae_model is not None)
 
             if has_integrated_vae:
-                try:
-                    logger.debug("Saving VAE weights from integrated Bagel model...")
-
-                    with FSDP.state_dict_type(
-                        model,
-                        StateDictType.FULL_STATE_DICT,
-                        FullStateDictConfig(rank0_only=True, offload_to_cpu=True)
-                    ):
-                        torch.cuda.synchronize()
-                        full_state_dict = model.state_dict()
-
-                        vae_saved = save_component_weights(full_state_dict, save_path, "vae_model", logger)
-
-                        del full_state_dict
-
-                except Exception as e:
-                    logger.warning(f"Failed to save integrated VAE weights: {e}")
+                # FIX: Skip redundant FSDP VAE save to avoid NCCL deadlock
+                # VAE weights are already saved in the main checkpoint saving process
+                # (via save_component_weights in fsdp_save_ckpt). The FSDP state_dict
+                # call here would cause deadlock because _save_inference_files is only
+                # called on rank 0, but FSDP collective operations require all ranks.
+                vae_model_path = os.path.join(save_path, "vae_model.safetensors")
+                if os.path.exists(vae_model_path):
+                    logger.debug("VAE weights already saved in main checkpoint, skipping in inference files")
+                    vae_saved = True
+                else:
+                    logger.warning("VAE weights not found in checkpoint, skipping FSDP save to avoid deadlock")
             
             if not vae_saved and vae_model is not None:
                 try:

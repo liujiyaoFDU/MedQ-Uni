@@ -56,7 +56,14 @@ CHECKPOINTS=(
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_2_max_T_lr_2_5e-6_pixel_weight_10000/0010000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_2_max_T_lr_2_5e-6_pixel_weight_10000/0008000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_2_max_T_lr_2_5e-6_pixel_weight_10000/0006000"
-"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0004000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0012500"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0060000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0080000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0010000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0030000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0060000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0100000"
+"/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0140000"
 )
 
 
@@ -80,7 +87,7 @@ ANNOTATION_FILES=(
 
 # 其他配置
 IMAGE_ROOT="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images"
-BASE_OUTPUT_DIR="stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_ver1"
+BASE_OUTPUT_DIR="stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1_part2"
 MAX_MEM="130GiB"
 
 # 生成参数
@@ -89,7 +96,7 @@ CFG_IMG_SCALE=2.0
 NUM_TIMESTEPS=50
 TIMESTEP_SHIFT=1.0
 SEED=42
-NUM_SAMPLES=1000
+NUM_SAMPLES=50
 
 # ============================================================
 # 全局环境变量

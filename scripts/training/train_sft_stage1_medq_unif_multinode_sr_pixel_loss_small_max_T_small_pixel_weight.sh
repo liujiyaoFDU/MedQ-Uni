@@ -52,12 +52,13 @@ SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project
 
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
 # MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6/0004000"
 MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly.yaml"
 
-# 训练参数配置 ） / Training parameters
-TOTAL_STEPS=144000         # 总训练步数 / Total training steps
+# 训练参数配置 ） / Training parameters 
+TOTAL_STEPS=288000         # 总训练步数 / Total training steps
 # SAVE_EVERY=20  
 SAVE_EVERY=5000           
 LOG_EVERY=1   
@@ -73,14 +74,14 @@ MSE_WEIGHT=1
 
 # Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
 # NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=10000
+PIXEL_LOSS_WEIGHT=1000
 PIXEL_LOSS_TYPE="l2"
 
 PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
 
 # === 新增：分块 VAE decode 配置 ===
-PIXEL_LOSS_CHUNK_SIZE="${PIXEL_LOSS_CHUNK_SIZE:-1}"  # 固定每次 1 张，确保最低内存
-PIXEL_LOSS_ADAPTIVE_CHUNK="${PIXEL_LOSS_ADAPTIVE_CHUNK:-false}"  # 关闭自适应，固定 chunk_size
+PIXEL_LOSS_CHUNK_SIZE="${PIXEL_LOSS_CHUNK_SIZE:-2}"  # 默认 2，可通过环境变量覆盖
+PIXEL_LOSS_ADAPTIVE_CHUNK="${PIXEL_LOSS_ADAPTIVE_CHUNK:-true}"  # 自适应分块
 PIXEL_LOSS_USE_V0="${PIXEL_LOSS_USE_V0:-false}"  # 默认使用新版本
 
 EMA_DECAY=0.995
@@ -98,7 +99,7 @@ export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6}"  # Experiment name
+EXP_NAME="${1:-stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000}"  # Experiment name
 NUM_GPUS="${2:-8}"
 MASTER_PORT="${3:-23456}"
 
@@ -213,8 +214,8 @@ torchrun \
   --checkpoint_dir "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/${EXP_NAME}" \
   --model_path "${MODEL_PATH}" \
   --resume_from  "${MODEL_PATH}" \
-  --resume_model_only False \
-  --resume_model_optimizer True \
+  --resume_model_only True \
+  --resume_model_optimizer False \
   --finetune_from_hf True \
   --finetune_from_ema False \
   --auto_resume True \
