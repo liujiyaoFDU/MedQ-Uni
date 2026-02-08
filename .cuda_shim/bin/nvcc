@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "nvcc: NVIDIA (R) Cuda compiler driver"
+echo "Cuda compilation tools, release 12.4, V12.4.0"
