@@ -546,3 +546,187 @@ result = generator.infer_single(
 - **Cell 4**: Image editing/generation examples
 
 ---
+
+## 🔬 SSIM Loss 集成计划
+
+### 📋 需求分析
+
+目前框架支持的损失函数：
+- **CE Loss**: 语言模型交叉熵损失
+- **MSE Loss**: 扩散模型速度匹配损失
+- **Pixel Loss**: 像素空间保真损失 (L1/L2)
+
+计划添加：
+- **SSIM Loss**: 结构相似性损失，更好地保持图像结构信息
+
+### 🏗️ 架构分析
+
+```
+losses.py                    bagel.py                      main_sr_pixel_loss.py
+┌─────────────────┐         ┌─────────────────────┐        ┌─────────────────────────┐
+│ compute_ce_loss │──────▶  │                     │        │ TrainingArguments:      │
+│ compute_mse_loss│──────▶  │ forward() 方法       │◀───────│  - pixel_loss_weight    │
+│ compute_pixel_loss│────▶  │ 返回 loss dict      │        │  - pixel_loss_type      │
+│ [新] compute_ssim_loss│──▶│                     │        │  - [新] ssim_loss_weight│
+└─────────────────┘         └─────────────────────┘        └─────────────────────────┘
+```
+
+### 📝 实现步骤
+
+#### Step 1: 在 `losses.py` 中添加 SSIM Loss 函数
+
+**文件**: `modeling/bagel/losses.py`
+
+```python
+def compute_ssim_loss(
+    x_pred: torch.Tensor,      # 预测图像 [B, C, H, W], 范围 [0, 1]
+    x_gt: torch.Tensor,        # 真实图像 [B, C, H, W], 范围 [0, 1]
+    mask: Optional[torch.Tensor] = None,  # 权重掩码 [B, 1, H, W]
+    window_size: int = 11,     # SSIM 窗口大小
+    channel: int = 3,          # 图像通道数
+    size_average: bool = True, # 是否对批次求平均
+) -> torch.Tensor:
+    """
+    Compute SSIM loss for image quality assessment.
+
+    SSIM measures structural similarity between two images, considering:
+    - Luminance: mean intensity comparison
+    - Contrast: variance comparison
+    - Structure: covariance comparison
+
+    Returns:
+        1 - SSIM (so that minimizing this loss maximizes SSIM)
+    """
+    ...
+```
+
+#### Step 2: 扩展 `compute_pixel_loss()` 以支持多种损失类型
+
+**修改策略**: 将 SSIM 集成到现有的 `compute_pixel_loss()` 框架中，通过 `pixel_loss_type` 参数控制
+
+```python
+# pixel_loss_type 支持的值:
+# - "l1": L1 像素损失
+# - "l2" / "mse": L2 像素损失
+# - "ssim": 纯 SSIM 损失
+# - "l1+ssim": L1 + SSIM 组合损失
+# - "l2+ssim": L2 + SSIM 组合损失
+```
+
+#### Step 3: 修改 `bagel.py` 的 `forward()` 方法
+
+**文件**: `modeling/bagel/bagel.py`
+
+添加新参数到 `forward()` 签名:
+```python
+def forward(
+    ...
+    # 现有像素损失参数
+    pixel_loss_weight: float = 0.0,
+    pixel_loss_type: str = "l1",
+    pixel_loss_max_t: float = 0.0,
+    # 新增 SSIM 损失参数
+    ssim_loss_weight: float = 0.0,
+    ssim_window_size: int = 11,
+    ...
+)
+```
+
+#### Step 4: 修改训练脚本参数
+
+**文件**: `train/main_sr_pixel_loss.py`
+
+在 `TrainingArguments` 中添加:
+```python
+@dataclass
+class TrainingArguments:
+    ...
+    # SSIM Loss 配置
+    ssim_loss_weight: float = field(
+        default=0.0,
+        metadata={"help": "Weight for SSIM loss. Set > 0 to enable."}
+    )
+
+    ssim_window_size: int = field(
+        default=11,
+        metadata={"help": "Window size for SSIM computation (default: 11)."}
+    )
+
+    ssim_loss_max_t: float = field(
+        default=0.3,
+        metadata={"help": "Apply SSIM loss only when timestep t <= this value."}
+    )
+```
+
+#### Step 5: 更新训练脚本配置
+
+**文件**: `scripts/training/train_sft_stage1_medq_unif_multinode_eyeQ1_sr_pixel_loss_small_max_T_large_pixel_weight.sh`
+
+添加 SSIM 配置:
+```bash
+# SSIM Loss 配置
+SSIM_LOSS_WEIGHT=1.0
+SSIM_WINDOW_SIZE=11
+SSIM_LOSS_MAX_T=0.3
+
+# 在 torchrun 命令中添加参数
+--ssim_loss_weight "${SSIM_LOSS_WEIGHT}" \
+--ssim_window_size "${SSIM_WINDOW_SIZE}" \
+--ssim_loss_max_t "${SSIM_LOSS_MAX_T}" \
+```
+
+### 🔧 灵活的损失组合设计
+
+为了支持多种损失函数的灵活组合，建议采用以下设计模式:
+
+**方案 A: 独立权重控制（推荐）**
+```python
+loss = 0
+loss += ce * ce_weight
+loss += mse * mse_weight
+loss += pixel * pixel_loss_weight    # L1/L2
+loss += ssim * ssim_loss_weight      # SSIM
+```
+
+**方案 B: 复合损失类型**
+```python
+# pixel_loss_type = "l1+ssim"
+# 内部自动组合，通过 ssim_ratio 控制比例
+pixel_loss = (1 - ssim_ratio) * l1_loss + ssim_ratio * ssim_loss
+```
+
+### 📊 训练配置示例
+
+```bash
+# 仅使用 Pixel Loss (L2)
+--pixel_loss_weight 10000 \
+--pixel_loss_type "l2" \
+--ssim_loss_weight 0 \
+
+# 仅使用 SSIM Loss
+--pixel_loss_weight 0 \
+--ssim_loss_weight 1.0 \
+
+# 组合使用 Pixel + SSIM
+--pixel_loss_weight 5000 \
+--pixel_loss_type "l2" \
+--ssim_loss_weight 0.5 \
+```
+
+### ⚠️ 注意事项
+
+1. **SSIM 计算成本**: SSIM 比 L1/L2 计算量大，建议使用分块计算
+2. **数值范围**: SSIM 输出在 [0, 1]，需要合理设置权重
+3. **时间步过滤**: 与 pixel loss 类似，SSIM 也应只在低噪声时间步应用
+4. **内存管理**: 复用 pixel loss 的分块 VAE decode 机制
+
+### 📁 需要修改的文件清单
+
+| 文件路径 | 修改内容 |
+|---------|---------|
+| `modeling/bagel/losses.py` | 添加 `compute_ssim_loss()` 函数 |
+| `modeling/bagel/bagel.py` | 扩展 `forward()` 支持 SSIM |
+| `train/main_sr_pixel_loss.py` | 添加 SSIM 相关训练参数 |
+| `scripts/training/*.sh` | 添加 SSIM 配置选项 |
+
+---

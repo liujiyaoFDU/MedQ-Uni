@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 
 # ============================================================================
-# Stage1 MedQ Unified Multi-Node Training Script (EyeQ1 + SR Pixel Loss)
-# Stage1 MedQ统一多节点训练脚本（EyeQ1 + 像素保真loss）
+# Stage1 MedQ Unified Multi-Node Training Script (EyeQ1 + SR SSIM Loss)
+# Stage1 MedQ统一多节点训练脚本（EyeQ1 + SSIM 结构相似性loss）
 # ============================================================================
-# This script is copied from:
-#   scripts/training/train_sft_stage1_medq_unif_multinode_eyeQ1.sh
+# Based on:
+#   train_sft_stage1_medq_unif_multinode_eyeQ1_sr_pixel_loss_small_max_T_large_pixel_weight.sh
 # Changes:
-#   - Use train/main_sr_pixel_loss.py as the training entrypoint
-#   - Enable pixel-space fidelity loss by default (for PSNR/SSIM-oriented restoration)
-#   - Keep all other settings consistent with the original script
+#   - Replace pixel loss (L2) with SSIM loss for perceptual quality
+#   - SSIM measures structural similarity (luminance + contrast + structure)
 
 # ============================================================================
 # 节点环境检测 / Node Environment Detection
@@ -50,14 +49,19 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
-# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
 
 CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
 
-TOTAL_STEPS=12000
+TOTAL_STEPS=20000
 SAVE_EVERY=2000
 LOG_EVERY=1
+
+
+# TOTAL_STEPS=100
+# SAVE_EVERY=50
+# LOG_EVERY=1
+
 
 LEARNING_RATE=2.5e-6
 
@@ -68,38 +72,42 @@ MAX_NUM_TOKENS_PER_SAMPLE=18000
 CE_WEIGHT=0.25
 MSE_WEIGHT=1
 
-# Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
-# NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=10000
+# Pixel-space fidelity loss: DISABLED (replaced by SSIM)
+PIXEL_LOSS_WEIGHT=0
 PIXEL_LOSS_TYPE="l2"
+PIXEL_LOSS_MAX_T=0.0
 
-PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
-
-# SSIM Loss Configuration (optional perceptual quality metric)
-# NOTE: SSIM measures structural similarity for better perceptual quality
-SSIM_LOSS_WEIGHT=0.0  # Set > 0 to enable SSIM loss (e.g., 0.5 or 1.0)
-SSIM_LOSS_MAX_T=0.3   # Apply SSIM only when timestep t <= this value
-SSIM_WINDOW_SIZE=11   # Window size for SSIM computation
+# SSIM Loss Configuration: ENABLED
+# SSIM measures structural similarity for better perceptual quality.
+# Loss = 1 - SSIM, so minimizing drives SSIM toward 1.0.
+# NOTE: Three layers of attenuation to prevent SSIM gradient explosion:
+#   1. ssim_loss_weight=0.1 (10x reduction from original 1.0)
+#   2. ssim_loss_max_t=0.1 (only clean samples where SSIM stats are reliable)
+#   3. ssim_grad_scale=0.01 (gradient scaling through VAE decoder)
+# Why max_t matters: at t=0.3, 30% noise corrupts SSIM local statistics (sigma),
+# causing denominator (sigma_x^2+sigma_y^2+C2) ≈ C2=0.0009 → gradient O(1e6) per-element.
+# At t=0.1, 90% signal keeps statistics stable → well-behaved gradients.
+SSIM_LOSS_WEIGHT=0.1      # SSIM loss weight (10x reduction from 1.0)
+SSIM_LOSS_MAX_T=0.1       # Apply SSIM only when timestep t <= 0.1 (90% signal, 10% noise)
+SSIM_WINDOW_SIZE=11       # Gaussian window size for SSIM computation
+SSIM_GRAD_SCALE=0.01       # Gradient scaling through VAE decoder (prevents 200-2000x gradient spike)
 
 EMA_DECAY=0.995
 
 # ============================================================================
-# Pixel Loss Debugging (optional)
+# Debugging (optional)
 # ============================================================================
-# Enable detailed pixel-loss diagnostics in modeling/bagel/bagel.py.
-# Set to 0/empty to disable for long runs.
 export PIXEL_LOSS_DEBUG="${PIXEL_LOSS_DEBUG:-0}"
 export PIXEL_LOSS_DEBUG_VERBOSE="${PIXEL_LOSS_DEBUG_VERBOSE:-0}"
 export PIXEL_LOSS_DEBUG_VERBOSE_MAX="${PIXEL_LOSS_DEBUG_VERBOSE_MAX:-2}"
 export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
-# SSIM Loss Debugging (optional)
 export SSIM_LOSS_DEBUG="${SSIM_LOSS_DEBUG:-0}"
 
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6}"  # Experiment name
-NUM_GPUS="${2:-8}"
+EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3}"  # Experiment name (v3: weight=0.1, max_t=0.1, grad_scale=0.01)
+NUM_GPUS="${2:-4}"
 MASTER_PORT="${3:-23456}"
 
 if [[ "${RUNNING_ON_H_CLUSTER}" == true ]]; then
@@ -181,11 +189,11 @@ TRAIN_SCRIPT="${SCRIPT_DIR}/train/main_sr_pixel_loss.py"
 # ============================================================================
 
 echo "============================================================================"
-echo "[INFO] Stage1 MedQ Unified Training (EyeQ1 + SR Pixel Loss)"
+echo "[INFO] Stage1 MedQ Unified Training (EyeQ1 + SR SSIM Loss)"
 echo "[CONFIG] Exp: ${EXP_NAME} | Steps: ${TOTAL_STEPS} | LR: ${LEARNING_RATE}"
 echo "[CONFIG] Nodes: ${NUM_NODES} | GPUs/node: ${NUM_GPUS} | Total GPUs: $((NUM_NODES * NUM_GPUS))"
-echo "[CONFIG] Pixel loss: w=${PIXEL_LOSS_WEIGHT} type=${PIXEL_LOSS_TYPE} max_t=${PIXEL_LOSS_MAX_T}"
-echo "[CONFIG] SSIM loss: w=${SSIM_LOSS_WEIGHT} max_t=${SSIM_LOSS_MAX_T} window=${SSIM_WINDOW_SIZE}"
+echo "[CONFIG] Pixel loss: w=${PIXEL_LOSS_WEIGHT} (DISABLED)"
+echo "[CONFIG] SSIM loss: w=${SSIM_LOSS_WEIGHT} max_t=${SSIM_LOSS_MAX_T} window=${SSIM_WINDOW_SIZE} grad_scale=${SSIM_GRAD_SCALE}"
 if [[ "${RUNNING_ON_H_CLUSTER}" == true ]]; then
     echo "[CONFIG] Node rank: ${ACTUAL_NODE_RANK} | Master: ${ACTUAL_MASTER_ADDR}:${MASTER_PORT}"
 fi
@@ -216,7 +224,7 @@ torchrun \
   --resume_model_only True \
   --resume_model_optimizer False \
   --finetune_from_hf True \
-  --finetune_from_ema False \
+  --finetune_from_ema True \
   --auto_resume True \
   --wandb_name "${EXP_NAME}" \
   --layer_module Qwen2MoTDecoderLayer \
@@ -240,6 +248,7 @@ torchrun \
   --ssim_loss_weight "${SSIM_LOSS_WEIGHT}" \
   --ssim_loss_max_t "${SSIM_LOSS_MAX_T}" \
   --ssim_window_size "${SSIM_WINDOW_SIZE}" \
+  --ssim_grad_scale "${SSIM_GRAD_SCALE}" \
   --freeze_llm False \
   --freeze_vit True \
   --freeze_vae True \

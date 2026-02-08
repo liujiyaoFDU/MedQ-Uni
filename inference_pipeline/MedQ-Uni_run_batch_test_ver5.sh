@@ -22,7 +22,7 @@ SCRIPT_PATH=$(realpath "${BASH_SOURCE[0]}")
 # 每个 GPU 上的并行任务数
 TASKS_PER_GPU=3
 # 可用的 GPU 列表
-GPUS=(0 1)
+GPUS=(0 1 2 3 4 5 6 7)
 
 # 多个 checkpoint 路径列表
 CHECKPOINTS=(
@@ -63,8 +63,13 @@ CHECKPOINTS=(
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0030000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0060000"
 # "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0100000"
-# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss/0002000"
-# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v2/0004000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000/0140000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/0002000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/0010000"
+# "/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/0014000"
+/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_ssim_loss_v3/0005000
+/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_ssim_loss_v3/0010000
+/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_sr_ssim_loss_v3/0015000
 )
 
 
@@ -85,10 +90,9 @@ ANNOTATION_FILES=(
 )
 
 
-
 # 其他配置
 IMAGE_ROOT="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/Dataset/images"
-BASE_OUTPUT_DIR="stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss"
+BASE_OUTPUT_DIR="stage1_medq_2nodes_unif_sr_ssim_loss_v3_50"
 MAX_MEM="130GiB"
 
 # 生成参数

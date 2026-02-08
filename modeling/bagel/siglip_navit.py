@@ -187,6 +187,8 @@ class SiglipVisionEmbeddings(nn.Module):
         packed_flattened_position_ids: torch.LongTensor
     ) -> torch.Tensor:
 
+        if packed_pixel_values.dtype != self.patch_embedding.weight.dtype:
+            packed_pixel_values = packed_pixel_values.to(self.patch_embedding.weight.dtype)
         patch_embeds = self.patch_embedding(packed_pixel_values)
         if not self.config.rope:
             embeddings = patch_embeds + self.position_embedding(packed_flattened_position_ids)

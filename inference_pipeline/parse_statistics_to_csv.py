@@ -23,16 +23,20 @@ import pandas as pd
 # ============================================================================
 # Configuration Constants (Default Values)
 # ============================================================================
-
 # Default input directories to search (used if --directories is not specified)
 # Modify these paths according to your project structure
 DEFAULT_INPUT_DIRECTORIES = [
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0010000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0030000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0060000",
-    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0100000"
+    # "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0010000",
+    # "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0030000",
+    # "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0060000",
+    # "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0100000",
+    # "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/results/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_ver1_part2/stage1_medq_2nodes_unif_sr_pixel_loss_0_2_max_T_lr_2_5e-6_PIXEL_LOSS_WEIGHT_1000_0140000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_0002000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_0010000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_0014000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_1000/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_0010000",
+    "/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_1000/stage1_medq_2nodes_unif_eyeQ1_sr_ssim_loss_v3_0014000"
 ]
-
 
 
 # Default output filename when not specified

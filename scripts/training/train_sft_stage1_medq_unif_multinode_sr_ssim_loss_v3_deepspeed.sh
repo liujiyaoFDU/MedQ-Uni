@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 
 # ============================================================================
-# Stage1 MedQ Unified Multi-Node Training Script (EyeQ1 + SR Pixel Loss)
-# Stage1 MedQ统一多节点训练脚本（EyeQ1 + 像素保真loss）
+# Stage1 MedQ Unified Multi-Node Training Script (SR SSIM Loss v3 — DeepSpeed ZeRO-2)
+# Stage1 MedQ统一多节点训练脚本（SSIM v3 大规模数据 — DeepSpeed ZeRO-2）
 # ============================================================================
-# This script is copied from:
-#   scripts/training/train_sft_stage1_medq_unif_multinode_eyeQ1.sh
-# Changes:
-#   - Use train/main_sr_pixel_loss.py as the training entrypoint
-#   - Enable pixel-space fidelity loss by default (for PSNR/SSIM-oriented restoration)
-#   - Keep all other settings consistent with the original script
+# Based on: train_sft_stage1_medq_unif_multinode_sr_ssim_loss_v3.sh (FSDP)
+# Changes from FSDP v3:
+#   - Uses DeepSpeed ZeRO-2 instead of FSDP HYBRID_SHARD
+#   - Removes FSDP-specific args (sharding_strategy, backward_prefetch, etc.)
+#   - Adds DeepSpeed args (zero_stage)
+#   - Keeps torchrun launcher (DeepSpeed supports torchrun)
+#   - All loss weights, model paths, freezing args unchanged
 
 # ============================================================================
 # 节点环境检测 / Node Environment Detection
@@ -50,55 +51,62 @@ source /mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/2025
 
 SCRIPT_DIR="/mnt/shared-storage-user/quwanying/huoshan_wanying/MedQbench/Project/202512_MedQ-UNI/MedQ-Uni"
 
-MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss/0002000"
-# MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/training_stage1/stage1_medq_2nodes_unif_combined_v1/stage1_medq_2nodes_unif_combined_v1/0024000"
+MODEL_PATH="/mnt/shared-storage-user/safevl-share/quwanying/MedQbench/MedQ-UNI/model_checkpoints/unimedvl_model_checkpoint_upload"
 
-CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly_eyeQ.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/configs/train_stage1_medq_unif_trainonly.yaml"
 
-TOTAL_STEPS=12000
-SAVE_EVERY=2000
+# 训练参数配置 / Training parameters (identical to FSDP v3)
+TOTAL_STEPS=288000         # 总训练步数 / Total training steps
+SAVE_EVERY=5000
 LOG_EVERY=1
 
 LEARNING_RATE=2.5e-6
 
-EXPECTED_NUM_TOKENS=18000
-MAX_NUM_TOKENS=20000
-MAX_NUM_TOKENS_PER_SAMPLE=18000
+EXPECTED_NUM_TOKENS=13000
+MAX_NUM_TOKENS=14000
+MAX_NUM_TOKENS_PER_SAMPLE=12000
 
 CE_WEIGHT=0.25
 MSE_WEIGHT=1
 
-# Pixel-space fidelity loss (enabled by default for SR/restoration metrics like PSNR/SSIM)
-# NOTE: The loss is gated internally to apply only on low-noise timesteps.
-PIXEL_LOSS_WEIGHT=10000
+# Pixel-space fidelity loss: DISABLED (replaced by SSIM)
+PIXEL_LOSS_WEIGHT=0
 PIXEL_LOSS_TYPE="l2"
+PIXEL_LOSS_MAX_T=0.0
 
-PIXEL_LOSS_MAX_T=0.2  # 增加到 1.0，覆盖几乎所有时间步
-
-# SSIM Loss Configuration (optional perceptual quality metric)
-# NOTE: SSIM measures structural similarity for better perceptual quality
-SSIM_LOSS_WEIGHT=0.0  # Set > 0 to enable SSIM loss (e.g., 0.5 or 1.0)
-SSIM_LOSS_MAX_T=0.3   # Apply SSIM only when timestep t <= this value
-SSIM_WINDOW_SIZE=11   # Window size for SSIM computation
+# SSIM Loss Configuration: ENABLED
+# SSIM measures structural similarity for better perceptual quality.
+# Loss = 1 - SSIM, so minimizing drives SSIM toward 1.0.
+# NOTE: Three layers of attenuation to prevent SSIM gradient explosion:
+#   1. ssim_loss_weight=0.1 (10x reduction from original 1.0)
+#   2. ssim_loss_max_t=0.1 (only clean samples where SSIM stats are reliable)
+#   3. ssim_grad_scale=0.01 (gradient scaling through VAE decoder)
+# Why max_t matters: at t=0.3, 30% noise corrupts SSIM local statistics (sigma),
+# causing denominator (sigma_x^2+sigma_y^2+C2) ≈ C2=0.0009 → gradient O(1e6) per-element.
+# At t=0.1, 90% signal keeps statistics stable → well-behaved gradients.
+SSIM_LOSS_WEIGHT=0.1      # SSIM loss weight (10x reduction from 1.0)
+SSIM_LOSS_MAX_T=0.1       # Apply SSIM only when timestep t <= 0.1 (90% signal, 10% noise)
+SSIM_WINDOW_SIZE=11       # Gaussian window size for SSIM computation
+SSIM_GRAD_SCALE=0.01       # Gradient scaling through VAE decoder (prevents 200-2000x gradient spike)
 
 EMA_DECAY=0.995
 
+# DeepSpeed 配置 / DeepSpeed configuration
+ZERO_STAGE=2
+
 # ============================================================================
-# Pixel Loss Debugging (optional)
+# Debugging (optional)
 # ============================================================================
-# Enable detailed pixel-loss diagnostics in modeling/bagel/bagel.py.
-# Set to 0/empty to disable for long runs.
 export PIXEL_LOSS_DEBUG="${PIXEL_LOSS_DEBUG:-0}"
 export PIXEL_LOSS_DEBUG_VERBOSE="${PIXEL_LOSS_DEBUG_VERBOSE:-0}"
 export PIXEL_LOSS_DEBUG_VERBOSE_MAX="${PIXEL_LOSS_DEBUG_VERBOSE_MAX:-2}"
 export PIXEL_LOSS_DEBUG_ABNORMAL_MAX="${PIXEL_LOSS_DEBUG_ABNORMAL_MAX:-5}"
-# SSIM Loss Debugging (optional)
 export SSIM_LOSS_DEBUG="${SSIM_LOSS_DEBUG:-0}"
 
 # ============================================================================
 # 命令行传入参数（可选） / Command-line Arguments (Optional)
 # ============================================================================
-EXP_NAME="${1:-stage1_medq_2nodes_unif_eyeQ1_sr_pixel_loss_0_5_max_T_lr_2_5e-6}"  # Experiment name
+EXP_NAME="${1:-stage1_medq_2nodes_unif_sr_ssim_loss_v3_deepspeed}"  # v3: weight=0.1, max_t=0.1, grad_scale=0.01 + DeepSpeed ZeRO-2
 NUM_GPUS="${2:-8}"
 MASTER_PORT="${3:-23456}"
 
@@ -140,6 +148,51 @@ fi
 
 cd "${SCRIPT_DIR}"
 
+# CUDA_HOME 自动检测 / Auto-detect CUDA_HOME for DeepSpeed
+if [[ -z "${CUDA_HOME}" ]]; then
+    # Try common CUDA paths
+    for cuda_dir in /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4; do
+        if [[ -f "${cuda_dir}/bin/nvcc" ]]; then
+            export CUDA_HOME="${cuda_dir}"
+            break
+        fi
+    done
+    # Fallback: find nvcc in PATH
+    if [[ -z "${CUDA_HOME}" ]]; then
+        NVCC_PATH=$(which nvcc 2>/dev/null)
+        if [[ -n "${NVCC_PATH}" ]]; then
+            export CUDA_HOME=$(dirname "$(dirname "${NVCC_PATH}")")
+        fi
+    fi
+    # Fallback: create nvcc shim for DeepSpeed import check
+    # (ZeRO-2 doesn't need nvcc at runtime, only at import for op compatibility check)
+    if [[ -z "${CUDA_HOME}" ]]; then
+        CUDA_VER=$(python3 -c "import torch; print(torch.version.cuda)" 2>/dev/null)
+        if [[ -n "${CUDA_VER}" ]]; then
+            SHIM_DIR="${SCRIPT_DIR}/.cuda_shim"
+            mkdir -p "${SHIM_DIR}/bin"
+            cat > "${SHIM_DIR}/bin/nvcc" << NVCC_EOF
+#!/bin/bash
+echo "nvcc: NVIDIA (R) Cuda compiler driver"
+echo "Cuda compilation tools, release ${CUDA_VER}, V${CUDA_VER}.0"
+NVCC_EOF
+            chmod +x "${SHIM_DIR}/bin/nvcc"
+            export CUDA_HOME="${SHIM_DIR}"
+            echo "[INFO] No CUDA toolkit found, created nvcc shim (PyTorch CUDA ${CUDA_VER})"
+        fi
+    fi
+    if [[ -n "${CUDA_HOME}" ]]; then
+        echo "[INFO] CUDA_HOME=${CUDA_HOME}"
+    fi
+fi
+
+# 检查DeepSpeed安装 / Verify DeepSpeed is installed
+python3 -c "import deepspeed; print(f'DeepSpeed version: {deepspeed.__version__}')"
+if [[ $? -ne 0 ]]; then
+    echo "[ERROR] DeepSpeed import failed. See error above."
+    exit 1
+fi
+
 # ============================================================================
 # GPU设备配置 / GPU Device Configuration
 # ============================================================================
@@ -172,20 +225,21 @@ else
 fi
 
 # ============================================================================
-# 训练脚本路径 / Training Script Path
+# 训练脚本路径 / Training Script Path (DeepSpeed version)
 # ============================================================================
-TRAIN_SCRIPT="${SCRIPT_DIR}/train/main_sr_pixel_loss.py"
+TRAIN_SCRIPT="${SCRIPT_DIR}/train/main_sr_pixel_loss_deepspeed.py"
 
 # ============================================================================
 # 训练信息输出 / Training Information Display
 # ============================================================================
 
 echo "============================================================================"
-echo "[INFO] Stage1 MedQ Unified Training (EyeQ1 + SR Pixel Loss)"
+echo "[INFO] Stage1 MedQ Unified Training (SR SSIM Loss v3 — DeepSpeed ZeRO-${ZERO_STAGE})"
 echo "[CONFIG] Exp: ${EXP_NAME} | Steps: ${TOTAL_STEPS} | LR: ${LEARNING_RATE}"
 echo "[CONFIG] Nodes: ${NUM_NODES} | GPUs/node: ${NUM_GPUS} | Total GPUs: $((NUM_NODES * NUM_GPUS))"
-echo "[CONFIG] Pixel loss: w=${PIXEL_LOSS_WEIGHT} type=${PIXEL_LOSS_TYPE} max_t=${PIXEL_LOSS_MAX_T}"
-echo "[CONFIG] SSIM loss: w=${SSIM_LOSS_WEIGHT} max_t=${SSIM_LOSS_MAX_T} window=${SSIM_WINDOW_SIZE}"
+echo "[CONFIG] DeepSpeed ZeRO Stage: ${ZERO_STAGE}"
+echo "[CONFIG] Pixel loss: w=${PIXEL_LOSS_WEIGHT} (DISABLED)"
+echo "[CONFIG] SSIM loss: w=${SSIM_LOSS_WEIGHT} max_t=${SSIM_LOSS_MAX_T} window=${SSIM_WINDOW_SIZE} grad_scale=${SSIM_GRAD_SCALE}"
 if [[ "${RUNNING_ON_H_CLUSTER}" == true ]]; then
     echo "[CONFIG] Node rank: ${ACTUAL_NODE_RANK} | Master: ${ACTUAL_MASTER_ADDR}:${MASTER_PORT}"
 fi
@@ -197,7 +251,7 @@ echo "[INFO] Training started at ${START_TIME}"
 echo "============================================================================"
 
 # ============================================================================
-# 启动分布式训练 / Launch Distributed Training
+# 启动分布式训练 / Launch Distributed Training (torchrun)
 # ============================================================================
 
 torchrun \
@@ -216,7 +270,7 @@ torchrun \
   --resume_model_only True \
   --resume_model_optimizer False \
   --finetune_from_hf True \
-  --finetune_from_ema False \
+  --finetune_from_ema True \
   --auto_resume True \
   --wandb_name "${EXP_NAME}" \
   --layer_module Qwen2MoTDecoderLayer \
@@ -240,6 +294,7 @@ torchrun \
   --ssim_loss_weight "${SSIM_LOSS_WEIGHT}" \
   --ssim_loss_max_t "${SSIM_LOSS_MAX_T}" \
   --ssim_window_size "${SSIM_WINDOW_SIZE}" \
+  --ssim_grad_scale "${SSIM_GRAD_SCALE}" \
   --freeze_llm False \
   --freeze_vit True \
   --freeze_vae True \
@@ -248,11 +303,7 @@ torchrun \
   --visual_gen True \
   --visual_und True \
   --ema "${EMA_DECAY}" \
-  --num_replicate "${NUM_NODES}" \
-  --num_shard "${NUM_GPUS}" \
-  --sharding_strategy HYBRID_SHARD \
-  --backward_prefetch BACKWARD_PRE \
-  --cpu_offload False \
+  --zero_stage "${ZERO_STAGE}" \
   --enable_tensorboard
 
 # ============================================================================

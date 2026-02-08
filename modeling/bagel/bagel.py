@@ -28,7 +28,7 @@ from data.data_utils import (
 )
 from .qwen2_navit import NaiveCache
 from .modeling_utils import MLPconnector, TimestepEmbedder, PositionEmbedding
-from .losses import compute_ce_loss, compute_mse_loss, compute_pixel_loss
+from .losses import compute_ce_loss, compute_mse_loss, compute_pixel_loss, compute_perceptual_loss
 
 from tqdm import tqdm
 
@@ -189,6 +189,11 @@ class Bagel(PreTrainedModel):
         pixel_loss_chunk_size: int = 2,
         pixel_loss_adaptive_chunk: bool = True,
         pixel_loss_use_v0: bool = False,
+        # === SSIM Loss 参数 ===
+        ssim_loss_weight: float = 0.0,
+        ssim_loss_max_t: float = 0.1,
+        ssim_window_size: int = 11,
+        ssim_grad_scale: float = 0.1,
         # === 其他参数 ===
         extract_diffusion_features: bool = False,
         align_only: bool = False,
@@ -364,6 +369,7 @@ class Bagel(PreTrainedModel):
 
         mse = None  # 初始化 MSE 损失，若条件不满足则保持为空
         pixel = None  # 初始化像素损失，若条件不满足则保持为空
+        ssim = None  # 初始化 SSIM 损失，若条件不满足则保持为空
         if self.config.visual_gen:
             # 局部命名更直观的别名（仅在该区域内使用）
             z0_tokens_clean = packed_latent_clean  # 干净潜变量 z0（打平 token 序列）
@@ -408,6 +414,31 @@ class Bagel(PreTrainedModel):
                 pixel_loss_use_v0=pixel_loss_use_v0,
             )
 
+            # Optional SSIM-based perceptual loss (for better structural similarity)
+            # Compute SSIM loss using modular function
+            ssim = compute_perceptual_loss(
+                last_hidden_state=last_hidden_state,
+                mse_loss_indexes=mse_loss_indexes,
+                llm2vae=self.llm2vae,
+                packed_latent_clean=z0_tokens_clean,
+                noise=noise_tokens,
+                packed_timesteps=t_tokens_all,
+                padded_images=padded_images,
+                patchified_vae_latent_shapes=patchified_vae_latent_shapes,
+                packed_vae_token_indexes=packed_vae_token_indexes,
+                vae_decode_fn=self.vae_decode,
+                latent_patch_size=self.latent_patch_size,
+                latent_channel=self.latent_channel,
+                latent_downsample=self.latent_downsample,
+                ssim_loss_weight=ssim_loss_weight,
+                ssim_loss_max_t=ssim_loss_max_t,
+                ssim_window_size=ssim_window_size,
+                is_training=self.training,
+                ssim_grad_scale=ssim_grad_scale,
+                pixel_loss_chunk_size=pixel_loss_chunk_size,
+                pixel_loss_adaptive_chunk=pixel_loss_adaptive_chunk,
+            )
+
         # Compute CE loss using modular function
         ce = compute_ce_loss(
             last_hidden_state=last_hidden_state,
@@ -434,7 +465,22 @@ class Bagel(PreTrainedModel):
                 )
                 pixel = torch.tensor(0.0, device=pixel.device, dtype=pixel.dtype)
 
-        result = dict(mse=mse, ce=ce, pixel=pixel)
+        # === SSIM Loss safety check ===
+        ssim_loss_debug = os.environ.get("SSIM_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+        if ssim is not None:
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            if ssim_loss_debug:
+                logger.info(f"++ [SSIM Loss Final Check] rank={rank} ssim={float(ssim.detach().item()):.6g} shape={ssim.shape} dtype={ssim.dtype}")
+            ssim_val = float(ssim.detach().item())
+            is_abnormal = (not torch.isfinite(ssim).all().item()) or (ssim_val > 1.0)
+            if is_abnormal:
+                logger.warning(
+                    f"++ [SSIM Loss Final Check Abnormal] rank={rank} "
+                    f"ssim={ssim_val:.6g} out of valid range [0,1], clamping to 0"
+                )
+                ssim = torch.tensor(0.0, device=ssim.device, dtype=ssim.dtype)
+
+        result = dict(mse=mse, ce=ce, pixel=pixel, ssim=ssim)
         if pixel_loss_debug:
             rank = dist.get_rank() if dist.is_initialized() else 0
             logger.info(f"++ [Pixel Loss Final Check] rank={rank} result:{result}")
@@ -446,8 +492,10 @@ class Bagel(PreTrainedModel):
             shapes.append(f"ce.shape={ce.shape}")
         if pixel is not None:
             shapes.append(f"pixel.shape={pixel.shape}")
-        if pixel_loss_debug:
-            logger.info(f"++ [Pixel Loss Shape] {', '.join(shapes)}")
+        if ssim is not None:
+            shapes.append(f"ssim.shape={ssim.shape}")
+        if pixel_loss_debug or ssim_loss_debug:
+            logger.info(f"++ [Loss Shape] {', '.join(shapes)}")
 
         rank = dist.get_rank() if dist.is_initialized() else 0
         if diffusion_features is not None:
@@ -657,6 +705,8 @@ class Bagel(PreTrainedModel):
             key_values_lens = corrected_tensors['key_values_lens']
 
         packed_text_embedding = self.language_model.model.embed_tokens(packed_text_ids)
+        if packed_vit_tokens.dtype != packed_text_embedding.dtype:
+            packed_vit_tokens = packed_vit_tokens.to(packed_text_embedding.dtype)
         packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.hidden_size))
         packed_sequence[packed_text_indexes] = packed_text_embedding
 

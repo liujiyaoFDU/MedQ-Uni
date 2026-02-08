@@ -861,3 +861,447 @@ def compute_pixel_loss(
         logger.info(f"++ [Pixel Loss Shape - Chunked] pixel.shape={pixel.shape}")
 
     return pixel
+
+
+# =============================================================================
+# SSIM Loss Implementation
+# =============================================================================
+
+def _gaussian_window(window_size: int, sigma: float, channel: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Create a 2D Gaussian window for SSIM computation.
+
+    Args:
+        window_size: Size of the window (typically 11)
+        sigma: Standard deviation of the Gaussian (typically 1.5)
+        channel: Number of channels to replicate the window for
+        device: Target device
+        dtype: Target dtype
+
+    Returns:
+        Gaussian window tensor of shape (channel, 1, window_size, window_size)
+    """
+    coords = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
+    g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    g = g / g.sum()
+
+    # Create 2D window from 1D
+    window_2d = g.unsqueeze(1) @ g.unsqueeze(0)  # (window_size, window_size)
+    window_2d = window_2d / window_2d.sum()
+
+    # Expand for all channels: (channel, 1, window_size, window_size)
+    window = window_2d.unsqueeze(0).unsqueeze(0).expand(channel, 1, window_size, window_size)
+
+    return window.contiguous()
+
+
+def _ssim_core(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    window: torch.Tensor,
+    window_size: int,
+    channel: int,
+    data_range: float = 1.0,
+    K1: float = 0.01,
+    K2: float = 0.03,
+) -> torch.Tensor:
+    """
+    Core SSIM computation between two images.
+
+    Args:
+        x: Predicted image, shape (B, C, H, W), range [0, data_range]
+        y: Ground truth image, shape (B, C, H, W), range [0, data_range]
+        window: Gaussian window for convolution
+        window_size: Size of the Gaussian window
+        channel: Number of image channels
+        data_range: Dynamic range of the images (1.0 for [0,1] normalized)
+        K1: Stability constant for luminance (default 0.01)
+        K2: Stability constant for contrast (default 0.03)
+
+    Returns:
+        SSIM map of shape (B, C, H', W') where H', W' are reduced by padding
+    """
+    C1 = (K1 * data_range) ** 2
+    C2 = (K2 * data_range) ** 2
+
+    padding = window_size // 2
+
+    # Compute means using grouped convolution
+    mu_x = F.conv2d(x, window, padding=padding, groups=channel)
+    mu_y = F.conv2d(y, window, padding=padding, groups=channel)
+
+    mu_x_sq = mu_x ** 2
+    mu_y_sq = mu_y ** 2
+    mu_xy = mu_x * mu_y
+
+    # Compute variances and covariance
+    sigma_x_sq = F.conv2d(x * x, window, padding=padding, groups=channel) - mu_x_sq
+    sigma_y_sq = F.conv2d(y * y, window, padding=padding, groups=channel) - mu_y_sq
+    sigma_xy = F.conv2d(x * y, window, padding=padding, groups=channel) - mu_xy
+
+    # Clamp variances to avoid negative values due to numerical precision
+    sigma_x_sq = torch.clamp(sigma_x_sq, min=0)
+    sigma_y_sq = torch.clamp(sigma_y_sq, min=0)
+
+    # SSIM formula
+    numerator = (2 * mu_xy + C1) * (2 * sigma_xy + C2)
+    denominator = (mu_x_sq + mu_y_sq + C1) * (sigma_x_sq + sigma_y_sq + C2)
+
+    ssim_map = numerator / (denominator + 1e-8)
+
+    return ssim_map
+
+
+def compute_ssim_loss(
+    x_pred: torch.Tensor,
+    x_gt: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+    window_size: int = 11,
+    data_range: float = 1.0,
+    K1: float = 0.01,
+    K2: float = 0.03,
+) -> torch.Tensor:
+    """
+    Compute SSIM loss for image quality assessment.
+
+    SSIM (Structural Similarity Index) measures the perceptual difference between
+    two images by considering luminance, contrast, and structure.
+
+    This returns 1 - SSIM so that minimizing the loss maximizes SSIM.
+
+    Args:
+        x_pred: Predicted image, shape (B, C, H, W), range [0, 1]
+        x_gt: Ground truth image, shape (B, C, H, W), range [0, 1]
+        mask: Optional weight mask, shape (B, 1, H, W). If provided, computes
+              weighted average SSIM loss.
+        window_size: Size of the Gaussian window (default: 11, must be odd)
+        data_range: Dynamic range of the images (default: 1.0 for normalized images)
+        K1: Stability constant for luminance comparison (default: 0.01)
+        K2: Stability constant for contrast comparison (default: 0.03)
+
+    Returns:
+        Scalar SSIM loss tensor (1 - mean SSIM)
+
+    Example:
+        >>> x_pred = torch.rand(2, 3, 256, 256)
+        >>> x_gt = torch.rand(2, 3, 256, 256)
+        >>> loss = compute_ssim_loss(x_pred, x_gt)
+        >>> loss.backward()
+    """
+    if x_pred.dim() != 4 or x_gt.dim() != 4:
+        raise ValueError(f"Expected 4D tensors (B, C, H, W), got {x_pred.dim()}D and {x_gt.dim()}D")
+
+    if x_pred.shape != x_gt.shape:
+        raise ValueError(f"Shape mismatch: x_pred {x_pred.shape} vs x_gt {x_gt.shape}")
+
+    B, C, H, W = x_pred.shape
+
+    # Ensure window size is valid
+    if window_size % 2 == 0:
+        window_size += 1
+    if H < window_size or W < window_size:
+        # Fall back to smaller window for small images
+        window_size = min(H, W)
+        if window_size % 2 == 0:
+            window_size -= 1
+        window_size = max(3, window_size)
+
+    # Create Gaussian window
+    sigma = 1.5
+    window = _gaussian_window(window_size, sigma, C, x_pred.device, x_pred.dtype)
+
+    # Compute SSIM map
+    ssim_map = _ssim_core(
+        x_pred, x_gt, window, window_size, C,
+        data_range=data_range, K1=K1, K2=K2
+    )
+
+    # Apply mask if provided
+    if mask is not None:
+        # Ensure mask has same spatial dimensions as ssim_map
+        if mask.shape[2:] != ssim_map.shape[2:]:
+            # Resize mask to match ssim_map
+            mask = F.interpolate(mask, size=ssim_map.shape[2:], mode='bilinear', align_corners=False)
+
+        # Expand mask to match channels
+        if mask.shape[1] == 1 and ssim_map.shape[1] > 1:
+            mask = mask.expand(-1, ssim_map.shape[1], -1, -1)
+
+        # Weighted mean
+        weighted_ssim = (ssim_map * mask).sum()
+        total_weight = mask.sum() * C + 1e-8
+        mean_ssim = weighted_ssim / total_weight
+    else:
+        mean_ssim = ssim_map.mean()
+
+    # Return 1 - SSIM as loss (lower is better)
+    ssim_loss = 1.0 - mean_ssim
+
+    # Clamp to valid range [0, 1]
+    ssim_loss = torch.clamp(ssim_loss, min=0.0, max=1.0)
+
+    return ssim_loss
+
+
+def _scale_gradient(x: torch.Tensor, scale: float) -> torch.Tensor:
+    """Scale backward gradient by `scale` without changing forward value.
+
+    Uses straight-through trick: x.detach() + scale * (x - x.detach())
+    Forward: returns x. Backward: grad *= scale.
+
+    This is critical for SSIM loss through the VAE decoder: SSIM's rational
+    function (numerator / denominator with small C2=0.0009) produces gradients
+    200-2000x larger than simple L1/L2 pixel losses. Without scaling, these
+    oversized gradients corrupt LLM/diffusion weights during training.
+    """
+    return x.detach() + scale * (x - x.detach())
+
+
+def compute_perceptual_loss(
+    # 核心模型输出
+    last_hidden_state: torch.Tensor,
+    mse_loss_indexes: torch.BoolTensor,
+    llm2vae: nn.Module,
+    # 潜变量和噪声
+    packed_latent_clean: torch.Tensor,
+    noise: torch.Tensor,
+    packed_timesteps: torch.Tensor,
+    # 图像和形状信息
+    padded_images: Optional[torch.Tensor],
+    patchified_vae_latent_shapes: Optional[List[Tuple[int, int]]],
+    packed_vae_token_indexes: Optional[torch.LongTensor],
+    # VAE 解码器
+    vae_decode_fn: Callable[[torch.Tensor], torch.Tensor],
+    # 模型配置
+    latent_patch_size: int,
+    latent_channel: int,
+    latent_downsample: int,
+    # 损失配置
+    ssim_loss_weight: float,
+    ssim_loss_max_t: float,
+    # 状态标志
+    is_training: bool,
+    # 可选参数
+    ssim_window_size: int = 11,
+    # === 梯度缩放参数 ===
+    ssim_grad_scale: float = 0.1,
+    # === 分块 VAE decode 参数 ===
+    pixel_loss_chunk_size: int = 2,
+    pixel_loss_adaptive_chunk: bool = True,
+) -> Optional[torch.Tensor]:
+    """
+    Compute SSIM-based perceptual loss with chunked VAE decode.
+
+    This function follows the same structure as compute_pixel_loss() but uses
+    SSIM instead of L1/L2 for image comparison.
+
+    Args:
+        ... (same as compute_pixel_loss) ...
+        ssim_loss_weight: Weight for SSIM loss (must be > 0 to enable)
+        ssim_loss_max_t: Apply SSIM only when timestep t <= this value
+        ssim_window_size: Window size for SSIM computation (default: 11)
+
+    Returns:
+        SSIM loss scalar tensor, or None if conditions not met
+    """
+    ssim_loss = None
+
+    # Aliases for clarity
+    z0_tokens_clean = packed_latent_clean
+    noise_tokens = noise
+    t_tokens_all = packed_timesteps
+
+    ssim_loss_debug = os.environ.get("SSIM_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
+
+    if (
+        is_training
+        and ssim_loss_weight > 0
+        and ssim_loss_max_t > 0
+        and padded_images is not None
+        and vae_decode_fn is not None
+        and patchified_vae_latent_shapes is not None
+        and packed_vae_token_indexes is not None
+        and packed_timesteps is not None
+        and len(patchified_vae_latent_shapes) > 0
+    ):
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        if ssim_loss_debug:
+            logger.info(f"++ [SSIM Loss Entry] rank={rank} conditions met, ssim_grad_scale={ssim_grad_scale}")
+
+        # Predict velocity (same as pixel loss)
+        velocity_pred = llm2vae(last_hidden_state[mse_loss_indexes])
+        velocity_target = noise_tokens - z0_tokens_clean
+        supervise_mask = t_tokens_all > 0
+
+        if velocity_pred.shape[0] == int(supervise_mask.sum().item()):
+            # Build per-token prediction of clean latent z0
+            t_tokens_supervised = t_tokens_all[supervise_mask].to(z0_tokens_clean.dtype)
+            z0_tokens_pred = z0_tokens_clean[supervise_mask] + t_tokens_supervised[:, None] * (velocity_target[supervise_mask] - velocity_pred)
+
+            z0_tokens_hybrid = z0_tokens_clean.clone()
+            z0_tokens_hybrid[supervise_mask] = z0_tokens_pred
+
+            # Compute per-image timestep
+            tokens_per_image = [h * w for (h, w) in patchified_vae_latent_shapes]
+            total_tokens_expected = sum(tokens_per_image)
+
+            if total_tokens_expected == z0_tokens_hybrid.shape[0]:
+                device = z0_tokens_hybrid.device
+                tokens_per_image_t = torch.tensor(tokens_per_image, device=device, dtype=torch.long)
+                image_start_ptrs = torch.cat(
+                    [torch.zeros(1, device=device, dtype=torch.long), tokens_per_image_t.cumsum(0)[:-1]],
+                    dim=0,
+                )
+
+                t_img = t_tokens_all[image_start_ptrs].to(z0_tokens_clean.dtype)
+                image_is_target = t_img > 0
+
+                # Weight only low-noise steps
+                w_img = torch.zeros_like(t_img, dtype=packed_latent_clean.dtype)
+                w_img[image_is_target] = torch.clamp(
+                    (float(ssim_loss_max_t) - t_img[image_is_target]) / float(ssim_loss_max_t),
+                    min=0.0,
+                    max=1.0,
+                )
+
+                selected = w_img > 0
+
+                if ssim_loss_debug and dist.get_rank() == 0:
+                    logger.info(
+                        f"[SSIM Loss Debug] images={len(t_img)} target={int(image_is_target.sum().item())} "
+                        f"selected(w>0)={int(selected.sum().item())}"
+                    )
+
+                if bool(selected.any().item()):
+                    p = latent_patch_size
+                    c = latent_channel
+                    vae_downsample = latent_downsample // p
+
+                    # Collect predicted latents + GT images
+                    pred_latents = []
+                    gt_images = []
+                    weights = []
+
+                    token_ptr = 0
+                    for img_idx, (h, w) in enumerate(patchified_vae_latent_shapes):
+                        num_img_tokens = h * w
+                        if bool(selected[img_idx].item()):
+                            tok = z0_tokens_hybrid[token_ptr : token_ptr + num_img_tokens]
+                            tok = tok.view(h, w, p, p, c)
+                            latent = torch.einsum("hwpqc->chpwq", tok).reshape(c, h * p, w * p)
+                            pred_latents.append(latent)
+
+                            H_img = h * latent_downsample
+                            W_img = w * latent_downsample
+                            gt_images.append(padded_images[img_idx, :, :H_img, :W_img])
+                            weights.append(w_img[img_idx])
+                        token_ptr += num_img_tokens
+
+                    if len(pred_latents) > 0:
+                        # Pad to max size
+                        max_h_lat = max(z.shape[1] for z in pred_latents)
+                        max_w_lat = max(z.shape[2] for z in pred_latents)
+                        max_h_img = max_h_lat * vae_downsample
+                        max_w_img = max_w_lat * vae_downsample
+
+                        latent_batch = z0_tokens_hybrid.new_zeros((len(pred_latents), c, max_h_lat, max_w_lat))
+                        gt_batch = padded_images.new_zeros((len(gt_images), padded_images.shape[1], max_h_img, max_w_img))
+                        mask = padded_images.new_zeros((len(gt_images), 1, max_h_img, max_w_img))
+
+                        for i, (z, x_gt, w_i) in enumerate(zip(pred_latents, gt_images, weights)):
+                            H_lat, W_lat = z.shape[1], z.shape[2]
+                            H_img, W_img = x_gt.shape[1], x_gt.shape[2]
+                            latent_batch[i, :, :H_lat, :W_lat] = z
+                            gt_batch[i, :, :H_img, :W_img] = x_gt
+                            mask[i, :, :H_img, :W_img] = w_i.to(mask.dtype)
+
+                        # Chunked VAE decode
+                        chunk_size = calculate_chunk_size(
+                            num_images=len(pred_latents),
+                            max_h_img=max_h_img,
+                            max_w_img=max_w_img,
+                            base_chunk_size=pixel_loss_chunk_size,
+                            adaptive=pixel_loss_adaptive_chunk
+                        )
+
+                        num_chunks = (len(pred_latents) + chunk_size - 1) // chunk_size
+
+                        if ssim_loss_debug and dist.get_rank() == 0:
+                            logger.info(
+                                f"[SSIM Loss Chunked] num_images={len(pred_latents)} "
+                                f"resolution={max_h_img}×{max_w_img} "
+                                f"chunk_size={chunk_size} num_chunks={num_chunks}"
+                            )
+
+                        # Accumulate SSIM loss
+                        ssim_numerator = torch.tensor(0.0, device=latent_batch.device, dtype=latent_batch.dtype)
+                        ssim_denominator = torch.tensor(0.0, device=latent_batch.device, dtype=latent_batch.dtype)
+
+                        for chunk_idx in range(num_chunks):
+                            start_idx = chunk_idx * chunk_size
+                            end_idx = min(start_idx + chunk_size, len(pred_latents))
+
+                            latent_chunk = latent_batch[start_idx:end_idx]
+                            gt_chunk = gt_batch[start_idx:end_idx]
+                            mask_chunk = mask[start_idx:end_idx]
+
+                            # VAE decode
+                            x_pred_chunk = vae_decode_fn(latent_chunk)
+                            x_pred_chunk = x_pred_chunk[:, :, :max_h_img, :max_w_img]
+                            # Scale gradients to prevent SSIM gradient explosion through VAE
+                            if ssim_grad_scale < 1.0:
+                                x_pred_chunk = _scale_gradient(x_pred_chunk, ssim_grad_scale)
+                            gt_chunk = gt_chunk.to(x_pred_chunk.dtype)
+
+                            # Normalize to [0, 1]
+                            x_pred_chunk_01 = (x_pred_chunk * 0.5 + 0.5).clamp(0, 1)
+                            gt_chunk_01 = (gt_chunk * 0.5 + 0.5).clamp(0, 1)
+
+                            # Compute SSIM loss for this chunk
+                            chunk_ssim_loss = compute_ssim_loss(
+                                x_pred_chunk_01,
+                                gt_chunk_01,
+                                mask=mask_chunk,
+                                window_size=ssim_window_size,
+                            )
+
+                            # Accumulate weighted by chunk size
+                            chunk_weight = mask_chunk.sum()
+                            ssim_numerator += chunk_ssim_loss * chunk_weight
+                            ssim_denominator += chunk_weight
+
+                            # Cleanup
+                            del x_pred_chunk, x_pred_chunk_01, gt_chunk_01
+
+                            if (chunk_idx + 1) % 2 == 0 or chunk_idx == num_chunks - 1:
+                                torch.cuda.empty_cache()
+
+                        # Final SSIM loss
+                        MIN_DENOM = 1e-3
+                        if float(ssim_denominator.item()) > MIN_DENOM:
+                            ssim_loss = ssim_numerator / ssim_denominator
+                        else:
+                            if ssim_loss_debug:
+                                logger.warning(f"++ [SSIM Loss Small Denom] rank={rank} denom={float(ssim_denominator.item()):.6g}")
+                            ssim_loss = torch.tensor(0.0, device=ssim_numerator.device, dtype=ssim_numerator.dtype)
+
+                        if ssim_loss_debug:
+                            logger.info(f"++ [SSIM Loss Exit] rank={rank} ssim_loss={float(ssim_loss.item()):.6g}")
+                else:
+                    if ssim_loss_debug and dist.get_rank() == 0:
+                        logger.info("++ [SSIM Loss Skip] selected==0, setting ssim_loss=0")
+                    ssim_loss = torch.tensor(0.0, device=z0_tokens_hybrid.device, dtype=z0_tokens_hybrid.dtype)
+
+    # Final safety check
+    if ssim_loss is not None:
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        ssim_val = float(ssim_loss.detach().item())
+        is_abnormal = (not torch.isfinite(ssim_loss).all().item()) or (ssim_val > 1.0)
+        if is_abnormal:
+            logger.warning(
+                f"++ [SSIM Loss Final Check Abnormal] rank={rank} "
+                f"ssim_loss={ssim_val:.6g} out of valid range [0,1], clamping to 0"
+            )
+            ssim_loss = torch.tensor(0.0, device=ssim_loss.device, dtype=ssim_loss.dtype)
+
+    return ssim_loss

@@ -1,16 +1,18 @@
 # Copyright 2025 Bytedance Ltd. and/or its affiliates.
-# SPDX-License-Identifier: Apache-2.0   
+# SPDX-License-Identifier: Apache-2.0
 
 """
-Unified NAVIT Training Script
+Unified NAVIT Training Script — DeepSpeed ZeRO-2 Version
 
 This script implements unified multimodal training for vision-language models
-with FSDP distributed training support.
+with DeepSpeed ZeRO-2 distributed training support.
 
-Key Features:
-- Three-stage training: VAE alignment → Discriminator → Joint training
-- Unified checkpoint save/load interface
-- Support for both visual understanding and generation
+Differences from the FSDP version (main_sr_pixel_loss.py):
+- Uses DeepSpeed ZeRO-2 instead of FSDP HYBRID_SHARD
+- EMA model is a plain deepcopy (no wrapping needed for ZeRO-2)
+- Backward/step handled by ds_engine.backward() / ds_engine.step()
+- Gradient clipping handled by DeepSpeed config
+- Checkpoint format identical (safetensors) for inference compatibility
 """
 
 import functools
@@ -36,11 +38,8 @@ local_time = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime(timestamp))
 import torch
 torch.backends.cudnn.benchmark = False
 import torch.distributed as dist
-from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-    CheckpointImpl,
-    apply_activation_checkpointing,
-    checkpoint_wrapper,
-)
+import deepspeed
+
 from torch.utils.data import DataLoader
 from transformers import HfArgumentParser, set_seed
 from transformers.optimization import (
@@ -56,24 +55,19 @@ from modeling.bagel import (
 )
 from modeling.qwen2 import Qwen2Tokenizer
 from train.train_utils import create_logger, get_latest_ckpt
-from train.fsdp_utils import (
-    FSDPCheckpoint, FSDPConfig, grad_checkpoint_check_fn, fsdp_wrapper, fsdp_ema_setup_with_ddp, fsdp_ema_update, fsdp_wrapper_with_ddp
+from train.deepspeed_utils import (
+    DeepSpeedCheckpoint,
+    generate_deepspeed_config,
+    deepspeed_ema_update,
+    apply_deepspeed_activation_checkpointing,
+    grad_checkpoint_check_fn,
 )
-
-
 
 
 def load_tensorboard_run_name_from_checkpoint(checkpoint_path, logger):
     """
     Load TensorBoard run name from checkpoint metadata.
     Returns None if not found (legacy checkpoint without metadata).
-
-    Args:
-        checkpoint_path: Path to checkpoint directory
-        logger: Logger instance
-
-    Returns:
-        str or None: TensorBoard run name if found, None for legacy checkpoints
     """
     if checkpoint_path is None or not os.path.exists(checkpoint_path):
         return None
@@ -87,7 +81,7 @@ def load_tensorboard_run_name_from_checkpoint(checkpoint_path, logger):
                 tensorboard_metadata = data.get('tensorboard_metadata', {})
                 run_name = tensorboard_metadata.get('run_name')
                 if run_name:
-                    logger.info(f"✅ Loaded TensorBoard run_name from checkpoint: {run_name}")
+                    logger.info(f"Loaded TensorBoard run_name from checkpoint: {run_name}")
                     return run_name
         except Exception as e:
             logger.warning(f"Failed to load TensorBoard metadata from checkpoint: {e}")
@@ -99,7 +93,6 @@ def log_model_parameters(logger, model, language_model, vit_model, vae_model, tr
     """Log parameter statistics for each model component."""
 
     def count_params(model, model_name):
-        """Count total, trainable, and frozen parameters."""
         if model is None:
             return 0, 0, 0
 
@@ -313,7 +306,7 @@ class TrainingArguments:
 
     finetune_from_ema: bool = field(
         default=False,
-        metadata={"help": "When resume_model_only=True, load the EMA (exponential moving average) weights instead of raw weights."}
+        metadata={"help": "When resume_model_only=True, load the EMA weights instead of raw weights."}
     )
     finetune_from_hf: bool = field(
         default=False,
@@ -352,7 +345,7 @@ class TrainingArguments:
         metadata={"help": "Minimum learning rate for cosine schedule (ignored for constant)."}
     )
 
-    # Component-specific learning rates (currently unused, reserved for future extensions)
+    # Component-specific learning rates
     e2e_lr: Optional[float] = field(
         default=None,
         metadata={"help": "Reserved parameter for component-specific learning rates. Currently unused."}
@@ -372,16 +365,16 @@ class TrainingArguments:
 
     beta1: float = field(
         default=0.9,
-        metadata={"help": "AdamW β₁ coefficient."}
+        metadata={"help": "AdamW beta1 coefficient."}
     )
     beta2: float = field(
         default=0.95,
-        metadata={"help": "AdamW β₂ coefficient."}
+        metadata={"help": "AdamW beta2 coefficient."}
     )
 
     eps: float = field(
         default=1e-15,
-        metadata={"help": "AdamW ε for numerical stability."}
+        metadata={"help": "AdamW epsilon for numerical stability."}
     )
 
     ema: float = field(
@@ -424,69 +417,40 @@ class TrainingArguments:
         metadata={"help": "Deprecated (ignored): kept for backward compatibility."}
     )
 
-    # === 新增参数：分块 VAE decode ===
     pixel_loss_chunk_size: int = field(
         default=2,
-        metadata={
-            "help": "Base chunk size for VAE decode (1-4 recommended). "
-                    "Lower = more memory saving, higher = faster. "
-                    "Adaptive mode will auto-adjust based on image resolution."
-        }
+        metadata={"help": "Base chunk size for VAE decode (1-4 recommended)."}
     )
 
     pixel_loss_adaptive_chunk: bool = field(
         default=True,
-        metadata={
-            "help": "Enable adaptive chunk size based on image resolution. "
-                    "Recommended for mixed-resolution datasets. "
-                    "When True: 1024×1024→chunk=1, 512×512→chunk=2, 256×256→chunk=4."
-        }
+        metadata={"help": "Enable adaptive chunk size based on image resolution."}
     )
 
     pixel_loss_use_v0: bool = field(
         default=False,
-        metadata={
-            "help": "Use original (v0) pixel loss implementation without chunking. "
-                    "Set to True to fallback to non-chunked version for debugging or comparison. "
-                    "Can also be controlled via PIXEL_LOSS_USE_V0 environment variable."
-        }
+        metadata={"help": "Use original (v0) pixel loss implementation without chunking."}
     )
 
-    # === SSIM Loss 配置 ===
+    # SSIM Loss
     ssim_loss_weight: float = field(
         default=0.0,
-        metadata={
-            "help": "Weight for SSIM (Structural Similarity) loss. "
-                    "Set > 0 to enable. SSIM measures perceptual image quality "
-                    "considering luminance, contrast, and structure."
-        }
+        metadata={"help": "Weight for SSIM (Structural Similarity) loss."}
     )
 
     ssim_loss_max_t: float = field(
         default=0.1,
-        metadata={
-            "help": "Apply SSIM loss only when diffusion timestep t <= this value (high SNR). "
-                    "Default 0.1: at t=0.1 the latent is 90%% signal / 10%% noise, "
-                    "so SSIM local statistics are reliable. Higher values (e.g. 0.3) "
-                    "include noisier samples where SSIM gradients become unreliable."
-        }
+        metadata={"help": "Apply SSIM loss only when diffusion timestep t <= this value."}
     )
 
     ssim_window_size: int = field(
         default=11,
-        metadata={
-            "help": "Window size for SSIM computation (default: 11). "
-                    "Must be odd. Larger windows capture more global structure."
-        }
+        metadata={"help": "Window size for SSIM computation (default: 11)."}
     )
 
     ssim_grad_scale: float = field(
         default=0.1,
-        metadata={
-            "help": "Gradient scaling for SSIM through VAE decoder (0.01-0.1 recommended). "
-                    "Attenuates SSIM's large rational-function gradients that are 200-2000x "
-                    "larger than simple L1/L2 pixel losses. Set 1.0 to disable."
-        }
+        metadata={"help": "Gradient scaling for SSIM through VAE decoder (0.01-0.1 recommended)."}
     )
 
     ce_weight: float = field(
@@ -504,30 +468,18 @@ class TrainingArguments:
         metadata={"help": "Soft target token count; yield the batch once it reaches or exceeds this size."}
     )
 
-    # Distributed training / FSDP
-    num_replicate: int = field(
-        default=1,
-        metadata={"help": "Number of model replicas per GPU rank for tensor parallelism."}
+    # DeepSpeed configuration (replaces FSDP args)
+    zero_stage: int = field(
+        default=2,
+        metadata={"help": "DeepSpeed ZeRO stage (2 or 3). Stage 2 recommended for EMA compatibility."}
     )
-
-    num_shard: int = field(
-        default=8,
-        metadata={"help": "Number of parameter shards when using FSDP HYBRID_SHARD."}
+    ds_config_file: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to DeepSpeed JSON config file. If None, config is auto-generated."}
     )
-
-    sharding_strategy: str = field(
-        default="HYBRID_SHARD",
-        metadata={"help": "FSDP sharding strategy: FULL_SHARD, SHARD_GRAD_OP, HYBRID_SHARD, etc."}
-    )
-
-    backward_prefetch: str = field(
-        default="BACKWARD_PRE",
-        metadata={"help": "FSDP backward prefetch strategy (BACKWARD_PRE or NO_PREFETCH)."}
-    )
-
-    cpu_offload: bool = field(
-        default=False,
-        metadata={"help": "Enable FSDP parameter offload to CPU."}
+    local_rank: int = field(
+        default=-1,
+        metadata={"help": "Local rank for DeepSpeed (set by launcher, do not set manually)."}
     )
 
     # Module freezing
@@ -562,13 +514,15 @@ class TrainingArguments:
     )
 
 
-
 def main():
-    """Main training function."""
+    """Main training function with DeepSpeed ZeRO-2."""
     assert torch.cuda.is_available()
-    dist.init_process_group("nccl")
+
+    # Initialize distributed with DeepSpeed
+    deepspeed.init_distributed(dist_backend="nccl")
     device = dist.get_rank() % torch.cuda.device_count()
     torch.cuda.set_device(device)
+
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -587,7 +541,7 @@ def main():
         if dist.get_rank() == 0:
             startup_msgs.append(f"ViT learning rate not set, using default: {training_args.vit_lr}")
 
-    # Setup logging (TensorBoard will be initialized later after resume config is determined)
+    # Setup logging
     if dist.get_rank() == 0:
         os.makedirs(training_args.results_dir, exist_ok=True)
         os.makedirs(training_args.checkpoint_dir, exist_ok=True)
@@ -596,9 +550,7 @@ def main():
         logger = create_logger(None, dist.get_rank())
     dist.barrier()
 
-    # Optional: per-rank hang watchdog (no distributed collectives).
-    # If a training step takes longer than the threshold, dump Python traceback to logs.
-    # Enable: export TRAIN_HANG_WATCHDOG_SECS=600
+    # Optional: per-rank hang watchdog
     hang_watchdog_secs_env = os.environ.get("TRAIN_HANG_WATCHDOG_SECS", "").strip()
     try:
         hang_watchdog_secs = float(hang_watchdog_secs_env) if hang_watchdog_secs_env else 0.0
@@ -614,7 +566,7 @@ def main():
         def _start_step_watchdog(step: int, stage_ref: list):
             timer = threading.Timer(
                 hang_watchdog_secs,
-                lambda: (  # noqa: E731 - intentional small lambda wrapper
+                lambda: (
                     logger.error(
                         f"[Hang Watchdog] step={step} rank={int(dist.get_rank())} stage={stage_ref[0]} "
                         f"exceeded {hang_watchdog_secs:.0f}s; dumping traceback"
@@ -626,7 +578,7 @@ def main():
             timer.start()
             return timer
 
-    # Optional debug: confirm which code files are actually being executed on the cluster.
+    # Optional debug: confirm code file paths
     if dist.get_rank() == 0:
         pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
         if pixel_loss_debug:
@@ -635,7 +587,7 @@ def main():
                 logger.info(f"[Pixel Loss Debug] code_paths train={__file__} bagel={bagel_mod.__file__}")
             except Exception as e:
                 logger.warning(f"[Pixel Loss Debug] failed to resolve code_paths: {e}")
-    
+
     if dist.get_rank() == 0:
         for m in startup_msgs:
             logger.info(m)
@@ -643,70 +595,52 @@ def main():
     logger.info(f'Model arguments {model_args}')
     logger.info(f'Data arguments {data_args}')
 
-    # Prepare resume logic
-    # Priority: auto_resume (checkpoint_dir) > resume_from (explicit path)
-    # When checkpoint_dir already has checkpoints, we prioritize continuing from there
+    # ========================================================================
+    # Resume logic (identical to FSDP version)
+    # ========================================================================
     is_resuming_from_interruption = False
     resume_from = training_args.resume_from
     resume_model_only = training_args.resume_model_only
     finetune_from_ema = False
 
-    # First check auto_resume (checkpoint_dir has highest priority)
     if training_args.auto_resume:
         latest_checkpoint = get_latest_ckpt(training_args.checkpoint_dir)
         if latest_checkpoint is not None:
-            # checkpoint_dir has existing checkpoint, prioritize it
             is_resuming_from_interruption = True
             resume_from = latest_checkpoint
-            resume_model_only = False  # Full resume when auto-resuming
-            finetune_from_ema = False  # keep optimizer/scheduler
-            logger.info(f"🔄 Auto-resume: Found checkpoint in checkpoint_dir: {latest_checkpoint}")
-            logger.info("📋 Resume mode: CONTINUE TRAINING (from interruption)")
-            logger.info("   → Loading full training state (model + optimizer + scheduler)")
-            logger.info("   → finetune_from_ema automatically disabled")
-            logger.info("   → Note: auto_resume takes priority over resume_from")
+            resume_model_only = False
+            finetune_from_ema = False
+            logger.info(f"Auto-resume: Found checkpoint in checkpoint_dir: {latest_checkpoint}")
+            logger.info("Resume mode: CONTINUE TRAINING (from interruption)")
         elif training_args.resume_from is not None:
-            # No checkpoint in checkpoint_dir, but resume_from is specified
             finetune_from_ema = training_args.finetune_from_ema
             if resume_model_only:
                 mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
             else:
                 mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
-            logger.info(f"🆕 Auto-resume: No checkpoint in {training_args.checkpoint_dir}")
-            logger.info(f"📋 Resume mode: {mode} (using resume_from as fallback)")
-            logger.info(f"   → Loading from: {resume_from}")
+            logger.info(f"Auto-resume: No checkpoint in {training_args.checkpoint_dir}")
+            logger.info(f"Resume mode: {mode} (using resume_from as fallback)")
+            logger.info(f"   Loading from: {resume_from}")
         else:
-            logger.info(f"🆕 Auto-resume: No checkpoint found in {training_args.checkpoint_dir}")
-            logger.info("📋 Resume mode: FRESH START")
+            logger.info(f"Auto-resume: No checkpoint found in {training_args.checkpoint_dir}")
+            logger.info("Resume mode: FRESH START")
     elif resume_from is not None:
-        # auto_resume is disabled, use explicit resume_from
         finetune_from_ema = training_args.finetune_from_ema
         if resume_model_only:
             mode = "FINETUNE FROM EMA" if finetune_from_ema else "FINETUNE FROM MODEL"
         else:
             mode = "RESUME FROM EMA" if finetune_from_ema else "RESUME FROM MODEL"
-        logger.info(f"📋 Resume mode: {mode}")
-        logger.info(f"   → Loading from: {resume_from}")
+        logger.info(f"Resume mode: {mode}")
+        logger.info(f"   Loading from: {resume_from}")
     else:
-        logger.info("📋 Resume mode: FRESH START")
+        logger.info("Resume mode: FRESH START")
 
     # Validate checkpoint resume configuration
     if finetune_from_ema and (resume_from is None or not os.path.exists(resume_from)):
         error_msg = (
             "CONFIGURATION ERROR: finetune_from_ema=True requires a valid resume_from path!\n"
             f"   Current resume_from: {resume_from}\n"
-            "   \n"
-            "   To fix this, you need to:\n"
-            "   1. Provide a valid checkpoint path: --resume_from /path/to/checkpoint\n"
-            "   2. Ensure the checkpoint folder contains ema.safetensors\n"
-            "   \n"
-            "   Example correct usage:\n"
-            "   --auto_resume False \\\n"
-            "   --resume_from /path/to/checkpoint \\\n"
-            "   --resume_model_only True \\\n"
-            "   --finetune_from_ema True\n"
-            "   \n"
-            "   Without resume_from, there's no checkpoint folder to load ema.safetensors from!"
+            "   To fix: provide --resume_from /path/to/checkpoint"
         )
         logger.error(error_msg)
         raise ValueError("finetune_from_ema=True requires valid resume_from path")
@@ -715,14 +649,9 @@ def main():
         ema_file = os.path.join(resume_from, "ema.safetensors")
         if not os.path.exists(ema_file):
             error_msg = (
-                f"❌ EMA FILE NOT FOUND: {ema_file}\n"
+                f"EMA FILE NOT FOUND: {ema_file}\n"
                 f"   Checkpoint folder: {resume_from}\n"
-                f"   Available files: {os.listdir(resume_from) if os.path.exists(resume_from) else 'N/A'}\n"
-                "   \n"
-                "   The checkpoint folder must contain ema.safetensors for EMA loading.\n"
-                "   Either:\n"
-                "   1. Use a different checkpoint that has EMA weights, or\n"
-                "   2. Set --finetune_from_ema False to load main model weights instead"
+                f"   Available files: {os.listdir(resume_from) if os.path.exists(resume_from) else 'N/A'}"
             )
             logger.error(error_msg)
             raise FileNotFoundError(f"EMA weights file not found: {ema_file}")
@@ -734,56 +663,47 @@ def main():
     logger.info(f"resume_model_only: {resume_model_only}")
     logger.info(f"finetune_from_ema: {finetune_from_ema}")
     logger.info(f"resume_model_optimizer: {training_args.resume_model_optimizer}")
-    if finetune_from_ema:
-        logger.info("🔄 Will load EMA weights (ema.safetensors) into main model for fine-tuning")
-    elif resume_from:
-        logger.info("🔄 Will load main model weights (model.safetensors)")
-    else:
-        logger.info("🆕 No checkpoint loading - starting fresh training")
     logger.info("=" * 40)
 
     # Set seed
     seed = training_args.global_seed * dist.get_world_size() + dist.get_rank()
     set_seed(seed)
 
-    # Initialize TensorBoard after resume configuration is determined
+    # ========================================================================
+    # TensorBoard initialization
+    # ========================================================================
+    tensorboard_dir = None
     if dist.get_rank() == 0 and training_args.enable_tensorboard:
-        # Smart TensorBoard directory management with backward compatibility
         tensorboard_run_name = None
 
         if is_resuming_from_interruption:
-            # Scenario: Resume from interruption (auto_resume)
             tensorboard_run_name = load_tensorboard_run_name_from_checkpoint(resume_from, logger)
             if tensorboard_run_name is None:
-                # Legacy checkpoint without metadata → use root directory (backward compatible)
                 tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard")
-                logger.info(f"📂 Legacy checkpoint detected, using root TensorBoard directory")
+                logger.info("Legacy checkpoint detected, using root TensorBoard directory")
             else:
-                # New checkpoint with metadata → use subdirectory
                 tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
-                logger.info(f"📂 Resuming TensorBoard run: {tensorboard_run_name}")
-
+                logger.info(f"Resuming TensorBoard run: {tensorboard_run_name}")
         elif resume_from is not None:
-            # Scenario: Explicit resume (new experiment from checkpoint)
             ckpt_step = os.path.basename(resume_from)
             tensorboard_run_name = f"{local_time}_from_{ckpt_step}"
             tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
-            logger.info(f"📂 Starting new experiment from checkpoint, TensorBoard run: {tensorboard_run_name}")
-
+            logger.info(f"Starting new experiment from checkpoint, TensorBoard run: {tensorboard_run_name}")
         else:
-            # Scenario: Fresh training → use timestamped subdirectory
             tensorboard_run_name = local_time
             tensorboard_dir = os.path.join(training_args.checkpoint_dir, "tensorboard", tensorboard_run_name)
-            logger.info(f"📂 Starting fresh training, TensorBoard run: {tensorboard_run_name}")
+            logger.info(f"Starting fresh training, TensorBoard run: {tensorboard_run_name}")
 
         os.makedirs(tensorboard_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=tensorboard_dir)
-        logger.info(f"📊 TensorBoard logs: {tensorboard_dir}")
+        logger.info(f"TensorBoard logs: {tensorboard_dir}")
     else:
         writer = None
         tensorboard_run_name = None
 
-    # Setup model
+    # ========================================================================
+    # Model setup (identical to FSDP version)
+    # ========================================================================
     if training_args.finetune_from_hf:
         llm_config = Qwen2Config.from_json_file(os.path.join(model_args.model_path, "llm_config.json"))
     else:
@@ -839,7 +759,6 @@ def main():
     )
 
     # VAE integration based on freeze_vae
-    # When pixel_loss_weight > 0 or ssim_loss_weight > 0, integrate VAE even if frozen (for decoder access)
     if training_args.visual_gen and (not training_args.freeze_vae or training_args.pixel_loss_weight > 0 or training_args.ssim_loss_weight > 0):
         model = Bagel(
             language_model,
@@ -861,9 +780,9 @@ def main():
         )
         logger.info("VAE kept external (frozen or not needed)")
 
-    log_model_parameters(logger, model, language_model, 
-                        vit_model if training_args.visual_und else None, 
-                        vae_model if training_args.visual_gen else None, 
+    log_model_parameters(logger, model, language_model,
+                        vit_model if training_args.visual_und else None,
+                        vae_model if training_args.visual_gen else None,
                         training_args)
 
     if training_args.visual_und:
@@ -877,6 +796,9 @@ def main():
         model.config.llm_config.vocab_size = len(tokenizer)
         model.language_model.config.vocab_size = len(tokenizer)
 
+    # ========================================================================
+    # Freezing strategy (identical to FSDP version)
+    # ========================================================================
     if training_args.visual_gen:
         if hasattr(model, 'vae_model') and model.vae_model is not None:
             if training_args.freeze_vae:
@@ -911,24 +833,19 @@ def main():
                         vae_model if training_args.visual_gen else None,
                         training_args)
 
-    # Setup FSDP and load pretrained model:
-    fsdp_config = FSDPConfig(
-        sharding_strategy=training_args.sharding_strategy,
-        backward_prefetch=training_args.backward_prefetch,
-        cpu_offload=training_args.cpu_offload,
-        num_replicate=training_args.num_replicate,
-        num_shard=training_args.num_shard,
-    )
-    
-    
+    # ========================================================================
+    # EMA model — simple deepcopy (no FSDP/DDP wrapping needed for ZeRO-2)
+    # ========================================================================
     ema_model = deepcopy(model)
+    for param in ema_model.parameters():
+        param.requires_grad = False
 
+    # Load model/EMA weights BEFORE DeepSpeed initialization
     external_vae = vae_model if (training_args.visual_gen and training_args.freeze_vae) else None
-
-    model, ema_model = FSDPCheckpoint.unified_load_checkpoint(
+    model, ema_model = DeepSpeedCheckpoint.load_model_checkpoint(
         resume_from, logger, model, ema_model,
         finetune_from_ema=finetune_from_ema,
-        external_vae_model=external_vae
+        external_vae_model=external_vae,
     )
 
     if training_args.visual_gen:
@@ -940,64 +857,49 @@ def main():
             logger.info(f"External VAE: {vae_params/1e6:.2f}M parameters")
         else:
             logger.warning("Visual generation enabled but no VAE model found")
-    ema_model = fsdp_ema_setup_with_ddp(ema_model, fsdp_config)
 
-    fsdp_model = fsdp_wrapper_with_ddp(model, fsdp_config)
+    # Move EMA model to device
+    ema_model = ema_model.to(device).to(torch.bfloat16)
 
-    apply_activation_checkpointing(
-        fsdp_model,
-        checkpoint_wrapper_fn=functools.partial(
-            checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT
-        ),
-        check_fn=grad_checkpoint_check_fn
-    )
-
-    if dist.get_rank() == 0:
-        logger.info("FSDP model structure:")
-        logger.info(f"{fsdp_model}")
-        logger.info("Parameter status check:")
-        for name, param in model.named_parameters():
-            logger.info(f"{name}: requires_grad={param.requires_grad}")
-
-
-
-    def create_param_groups(fsdp_model, training_args):
+    # ========================================================================
+    # Optimizer with per-component learning rates
+    # ========================================================================
+    def create_param_groups(model, training_args):
         assigned_params = set()
-
         param_groups = []
 
+        if hasattr(model, "vae_model") and model.vae_model is not None:
+            vae_params = [p for p in model.vae_model.parameters() if p.requires_grad]
+            if vae_params:
+                param_groups.append({
+                    'params': vae_params,
+                    'lr': getattr(training_args, 'vae_lr', training_args.lr),
+                    'name': 'vae_model'
+                })
+                assigned_params.update(id(p) for p in vae_params)
 
-        if hasattr(fsdp_model, "vae_model") and fsdp_model.vae_model is not None:
-            vae_params = list(fsdp_model.vae_model.parameters())
-            param_groups.append({
-                'params': vae_params,
-                'lr': getattr(training_args, 'vae_lr', training_args.lr),
-                'name': 'vae_model'
-            })
-            assigned_params.update(vae_params)
+        if hasattr(model, "vit_model") and model.vit_model is not None:
+            vit_params = [p for p in model.vit_model.parameters() if p.requires_grad]
+            if vit_params:
+                param_groups.append({
+                    'params': vit_params,
+                    'lr': getattr(training_args, 'vit_lr', training_args.lr),
+                    'name': 'vit_model'
+                })
+                assigned_params.update(id(p) for p in vit_params)
 
-        if hasattr(fsdp_model, "vit_model") and fsdp_model.vit_model is not None:
-            vit_params = list(fsdp_model.vit_model.parameters())
-            param_groups.append({
-                'params': vit_params,
-                'lr': getattr(training_args, 'vit_lr', training_args.lr),
-                'name': 'vit_model'
-            })
-            assigned_params.update(vit_params)
-
-        if hasattr(fsdp_model, "language_model") and fsdp_model.language_model is not None:
-            llm_params = list(fsdp_model.language_model.parameters())
-            llm_params = [p for p in llm_params if p not in assigned_params]
+        if hasattr(model, "language_model") and model.language_model is not None:
+            llm_params = [p for p in model.language_model.parameters() if p.requires_grad and id(p) not in assigned_params]
             if llm_params:
                 param_groups.append({
                     'params': llm_params,
                     'lr': getattr(training_args, 'llm_lr', training_args.lr),
                     'name': 'language_model'
                 })
-                assigned_params.update(llm_params)
+                assigned_params.update(id(p) for p in llm_params)
 
         others_params = [
-            p for p in fsdp_model.parameters() if p not in assigned_params
+            p for p in model.parameters() if p.requires_grad and id(p) not in assigned_params
         ]
         if others_params:
             param_groups.append({
@@ -1008,32 +910,30 @@ def main():
 
         return param_groups
 
-
-
-    param_groups = create_param_groups(fsdp_model, training_args)
+    param_groups = create_param_groups(model, training_args)
 
     if dist.get_rank() == 0:
         logger.info("=" * 60)
-        logger.info("Optimizer parameter group configuration validation")
+        logger.info("Optimizer parameter group configuration")
         logger.info("=" * 60)
         total_params = 0
         for i, group in enumerate(param_groups):
             group_name = group.get('name', f'group_{i}')
             group_lr = group.get('lr', 'default')
-            param_count = len(group['params'])
+            param_count = sum(p.numel() for p in group['params'])
             total_params += param_count
-            logger.info(f"{group_name}: {param_count} parameters, learning_rate={group_lr}")
-        logger.info(f"Total parameters managed by optimizer: {total_params}")
+            logger.info(f"{group_name}: {param_count:,} parameters ({param_count/1e6:.1f}M), learning_rate={group_lr}")
+        logger.info(f"Total trainable parameters: {total_params:,} ({total_params/1e6:.1f}M)")
         logger.info("=" * 60)
-    
+
     optimizer = torch.optim.AdamW(
         param_groups,
-        betas=(training_args.beta1, training_args.beta2), 
-        eps=training_args.eps, 
+        betas=(training_args.beta1, training_args.beta2),
+        eps=training_args.eps,
         weight_decay=0
     )
 
-
+    # Scheduler
     if training_args.lr_scheduler == 'cosine':
         scheduler = get_cosine_with_min_lr_schedule_with_warmup(
             optimizer=optimizer,
@@ -1046,17 +946,51 @@ def main():
             optimizer=optimizer, num_warmup_steps=training_args.warmup_steps
         )
     else:
-        raise ValueError
+        raise ValueError(f"Unknown lr_scheduler: {training_args.lr_scheduler}")
 
-    # maybe resume optimizer, scheduler, and train_steps
+    # ========================================================================
+    # DeepSpeed initialization
+    # ========================================================================
+    if training_args.ds_config_file and os.path.exists(training_args.ds_config_file):
+        import json
+        with open(training_args.ds_config_file, 'r') as f:
+            ds_config = json.load(f)
+        logger.info(f"Loaded DeepSpeed config from {training_args.ds_config_file}")
+    else:
+        ds_config = generate_deepspeed_config(training_args)
+        logger.info(f"Auto-generated DeepSpeed config: ZeRO stage {training_args.zero_stage}")
+
+    ds_engine, optimizer, _, scheduler = deepspeed.initialize(
+        model=model,
+        optimizer=optimizer,
+        config=ds_config,
+        lr_scheduler=scheduler,
+    )
+    logger.info("DeepSpeed engine initialized")
+
+    # Activation checkpointing
+    apply_deepspeed_activation_checkpointing(ds_engine.module, grad_checkpoint_check_fn)
+
+    if dist.get_rank() == 0:
+        logger.info("DeepSpeed model structure (top-level):")
+        for name, child in ds_engine.module.named_children():
+            logger.info(f"  {name}: {type(child).__name__}")
+
+    # ========================================================================
+    # Load optimizer/scheduler state (after DeepSpeed init)
+    # ========================================================================
     if resume_model_only:
         train_step = 0
         data_status = None
     else:
-        optimizer, scheduler, train_step, data_status = FSDPCheckpoint.try_load_train_state(
-            resume_from, optimizer, scheduler, fsdp_config,resume_model_optimizer = training_args.resume_model_optimizer
+        ds_engine, scheduler, train_step, data_status = DeepSpeedCheckpoint.load_train_state(
+            resume_from, ds_engine, scheduler, logger,
+            resume_model_optimizer=training_args.resume_model_optimizer,
         )
 
+    # ========================================================================
+    # Dataset and DataLoader (identical to FSDP version)
+    # ========================================================================
     with open(data_args.dataset_config_file, "r") as stream:
         dataset_meta = yaml.safe_load(stream)
         logger.info("=" * 50)
@@ -1114,15 +1048,18 @@ def main():
     torch.distributed.barrier()
     logger.info(f"Rank {dist.get_rank()} DataLoader initialization completed, ready to start training")
 
+    # ========================================================================
+    # VAE setup
+    # ========================================================================
     def get_unified_vae_model():
-        """Get unified VAE model reference"""
-        if hasattr(fsdp_model.module, 'vae_model') and fsdp_model.module.vae_model is not None:
-            return fsdp_model.module.vae_model
+        """Get unified VAE model reference (from DeepSpeed engine or external)."""
+        if hasattr(ds_engine.module, 'vae_model') and ds_engine.module.vae_model is not None:
+            return ds_engine.module.vae_model
         elif vae_model is not None:
             return vae_model
         else:
             return None
-    
+
     if training_args.visual_gen:
         actual_vae = get_unified_vae_model()
 
@@ -1139,8 +1076,8 @@ def main():
                 actual_vae.eval()
             else:
                 actual_vae.train()
-    
-    fsdp_model.train()
+
+    ds_engine.train()
     ema_model.eval()
 
     start_time = time_second()
@@ -1150,6 +1087,9 @@ def main():
     if actual_vae is not None and hasattr(actual_vae, 'cuda'):
         actual_vae = actual_vae.cuda(device)
 
+    # ========================================================================
+    # Training loop
+    # ========================================================================
     for curr_step, data in enumerate(train_loader, start=train_step):
         if curr_step >= training_args.total_steps:
             break
@@ -1161,6 +1101,7 @@ def main():
 
         data = data.cuda(device).to_dict()
 
+        # Data integrity check
         data_check_passed = True
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
@@ -1179,9 +1120,7 @@ def main():
 
         if not data_check_passed:
             logger.warning(f"Step {curr_step}: Data integrity check failed")
-            
-        # NOTE: a per-step barrier can easily deadlock if any rank stalls/crashes, and it also slows training.
-        # Keep it opt-in for debugging only.
+
         step_barrier = os.environ.get("TRAIN_STEP_BARRIER", "").lower() in {"1", "true", "yes", "y"}
         if step_barrier:
             torch.distributed.barrier()
@@ -1189,6 +1128,7 @@ def main():
         data_indexes = data.pop('batch_data_indexes', None)
         ce_loss_weights = data.pop('ce_loss_weights', None)
 
+        # ---- VAE encode ----
         images_to_encode = data.get('padded_images', None)
         if images_to_encode is not None and isinstance(images_to_encode, torch.Tensor) and images_to_encode.numel() > 0:
             assert images_to_encode.dim() == 4, f"Expect NCHW format, got {tuple(images_to_encode.shape)}"
@@ -1221,13 +1161,9 @@ def main():
                 logger.error(f"actual_vae available methods: {[m for m in dir(actual_vae) if not m.startswith('_')]}")
                 raise
 
-        # Keep original images only when we need pixel-space loss; otherwise drop to save memory.
-
-        # Data debug: check if padded_images exists
+        # Pixel loss debug
         pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
         if pixel_loss_debug and training_args.pixel_loss_weight > 0 and dist.get_rank() == 0 and curr_step % 10 == 0:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.info(f"[Data Check Step {curr_step}] 'padded_images' in data: {'padded_images' in data}")
 
         if training_args.pixel_loss_weight > 0 or training_args.ssim_loss_weight > 0:
@@ -1235,11 +1171,9 @@ def main():
             data['pixel_loss_type'] = training_args.pixel_loss_type
             data['pixel_loss_max_t'] = training_args.pixel_loss_max_t
             data['pixel_loss_paired_only'] = training_args.pixel_loss_paired_only
-            # === 新增参数：分块 VAE decode ===
             data['pixel_loss_chunk_size'] = training_args.pixel_loss_chunk_size
             data['pixel_loss_adaptive_chunk'] = training_args.pixel_loss_adaptive_chunk
             data['pixel_loss_use_v0'] = training_args.pixel_loss_use_v0
-            # === SSIM Loss 参数 ===
             data['ssim_loss_weight'] = training_args.ssim_loss_weight
             data['ssim_loss_max_t'] = training_args.ssim_loss_max_t
             data['ssim_window_size'] = training_args.ssim_window_size
@@ -1247,12 +1181,14 @@ def main():
         else:
             data.pop('padded_images', None)
 
+        # ---- Forward pass ----
         stage_ref[0] = "forward"
         with torch.amp.autocast("cuda", enabled=True, dtype=torch.bfloat16):
-            loss_dict = fsdp_model(**data)
+            loss_dict = ds_engine(**data)
 
         loss = 0
 
+        # ---- CE loss ----
         ce = loss_dict["ce"]
         if ce is not None:
             total_ce_tokens = torch.tensor(len(data['ce_loss_indexes']), device=device)
@@ -1272,6 +1208,7 @@ def main():
             loss_dict["ce"] = torch.tensor(0, device=device)
             total_ce_tokens = torch.tensor(0, device=device)
 
+        # ---- MSE + Pixel + SSIM losses ----
         if training_args.visual_gen:
             mse = loss_dict["mse"]
             total_mse_tokens = torch.tensor(len(data.get('mse_loss_indexes', [])), device=device)
@@ -1282,11 +1219,6 @@ def main():
 
             pixel = loss_dict.get("pixel")
             if pixel is not None:
-                # Debug: find which rank produces abnormal pixel loss.
-                # The logged "Train Loss pixel" is averaged across ranks; a single-rank blow-up will contaminate the global value.
-                #
-                # IMPORTANT: avoid collective ops (all_gather) here by default; if only some ranks enter a collective
-                # the job can deadlock. Prefer per-rank logging on abnormal_local.
                 pixel_loss_debug = os.environ.get("PIXEL_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
                 if pixel_loss_debug and dist.is_initialized():
                     try:
@@ -1309,7 +1241,7 @@ def main():
             else:
                 loss_dict["pixel"] = torch.tensor(0, device=device)
 
-            # === SSIM Loss 处理 ===
+            # SSIM Loss
             ssim = loss_dict.get("ssim")
             if ssim is not None:
                 ssim_loss_debug = os.environ.get("SSIM_LOSS_DEBUG", "").lower() in {"1", "true", "yes", "y"}
@@ -1339,24 +1271,24 @@ def main():
             loss_dict["ssim"] = torch.tensor(0, device=device)
             total_mse_tokens = torch.tensor(0, device=device)
 
-        optimizer.zero_grad()
-   
+        # ---- Backward + step (DeepSpeed handles gradient clipping) ----
         if torch.isnan(loss) or torch.isinf(loss):
             logger.error(f"Step {curr_step}: Abnormal loss value: {loss}")
             torch.distributed.barrier()
-        
-        stage_ref[0] = "backward"
-        loss.backward()
 
-        total_norm = fsdp_model.clip_grad_norm_(training_args.max_grad_norm)
-        
+        stage_ref[0] = "backward"
+        ds_engine.backward(loss)
+
         stage_ref[0] = "optimizer_step"
-        optimizer.step()
-        scheduler.step()
+        # ds_engine.step() internally calls optimizer.step() + scheduler.step()
+        # (scheduler was passed via lr_scheduler= to deepspeed.initialize)
+        ds_engine.step()
         torch.cuda.empty_cache()
 
-        fsdp_ema_update(ema_model, fsdp_model, decay=training_args.ema)
+        # EMA update
+        deepspeed_ema_update(ema_model, ds_engine, decay=training_args.ema)
 
+        # ---- Logging ----
         if curr_step % training_args.log_every == 0:
             stage_ref[0] = "logging"
             total_samples = torch.tensor(len(data['sample_lens']), device=device)
@@ -1380,27 +1312,25 @@ def main():
                 else:
                     avg_loss = torch.tensor(float(value), device=device)
 
-                # === Critical fix: Catch abnormal pixel loss before all_reduce ===
-                # If any rank has an abnormal pixel value (NaN/Inf or >1.0), it will contaminate
-                # the global average after all_reduce. We clamp it to 0 here to prevent that.
+                # Catch abnormal pixel loss before all_reduce
                 if key == "pixel":
                     pixel_val = float(avg_loss.item())
                     is_abnormal = (not torch.isfinite(avg_loss).all().item()) or (pixel_val > 1.0)
                     if is_abnormal:
                         logger.warning(
                             f"[Pixel Loss Pre-AllReduce] rank={dist.get_rank()} step={curr_step:07d} "
-                            f"pixel={pixel_val:.6g} is abnormal (NaN/Inf or >1.0), clamping to 0"
+                            f"pixel={pixel_val:.6g} is abnormal, clamping to 0"
                         )
                         avg_loss = torch.tensor(0.0, device=device)
 
-                # === Critical fix: Catch abnormal SSIM loss before all_reduce ===
+                # Catch abnormal SSIM loss before all_reduce
                 if key == "ssim":
                     ssim_val = float(avg_loss.item())
                     is_abnormal = (not torch.isfinite(avg_loss).all().item()) or (ssim_val > 1.0)
                     if is_abnormal:
                         logger.warning(
                             f"[SSIM Loss Pre-AllReduce] rank={dist.get_rank()} step={curr_step:07d} "
-                            f"ssim={ssim_val:.6g} is abnormal (NaN/Inf or >1.0), clamping to 0"
+                            f"ssim={ssim_val:.6g} is abnormal, clamping to 0"
                         )
                         avg_loss = torch.tensor(0.0, device=device)
 
@@ -1409,7 +1339,7 @@ def main():
                 message += f"Train Loss {key}: {avg_loss:.4f}, "
                 log[key] = avg_loss
 
-            # 追加加权后的分项损失（便于 TensorBoard 和日志直接看到"实际参与总损失"的数值）
+            # Weighted loss terms
             weighted_terms = {}
             if "ce" in log:
                 weighted_terms["ce_weighted"] = log["ce"] * training_args.ce_weight
@@ -1424,7 +1354,7 @@ def main():
                 message += f"Train Loss {key}: {avg_loss:.4f}, "
                 log[key] = avg_loss
 
-            # 总损失（已包含权重），对各 rank 取平均后记录
+            # Total loss (averaged across ranks)
             total_loss_avg = loss.detach()
             if total_loss_avg.device != device:
                 total_loss_avg = total_loss_avg.to(device)
@@ -1442,9 +1372,10 @@ def main():
             log['lr'] = optimizer.param_groups[0]['lr']
             log['total_mse_tokens'] = total_mse_tokens.item()
             log['total_ce_tokens'] = total_ce_tokens.item()
-            log['total_norm'] = total_norm.item()
+            # DeepSpeed handles gradient clipping; log the norm if available
+            log['total_norm'] = 0.0  # DeepSpeed clips internally
             log['total_samples'] = total_samples.item()
-            log['training_mode'] = 'standard'
+            log['training_mode'] = 'deepspeed_zero2'
 
             if dist.get_rank() == 0 and writer is not None:
                 for key, value in log.items():
@@ -1453,6 +1384,7 @@ def main():
                         writer.add_scalar(f'train/{key}', scalar_value, curr_step)
             start_time = time_second()
 
+        # ---- Data status tracking ----
         if data_status is None:
             data_status = {}
         for item in data_indexes:
@@ -1460,27 +1392,26 @@ def main():
                 data_status[item['dataset_name']] = {}
             data_status[item['dataset_name']][item['worker_id']] = item['data_indexes']
 
+        # ---- Checkpoint save ----
         if curr_step > 0 and curr_step % training_args.save_every == 0:
             stage_ref[0] = "checkpoint_save"
             logger.info("Saving checkpoint...")
             torch.cuda.empty_cache()
-            
+
             if dist.get_rank() == 0:
                 gather_list = [None] * dist.get_world_size()
             else:
                 gather_list = None
             dist.gather_object(data_status, gather_list, dst=0)
 
-            actual_save_path = FSDPCheckpoint.unified_save_checkpoint(
+            actual_save_path = DeepSpeedCheckpoint.save_checkpoint(
                 save_path=os.path.join(training_args.checkpoint_dir, f"{curr_step:07d}"),
                 train_steps=curr_step,
-                model=fsdp_model,
+                ds_engine=ds_engine,
                 ema_model=ema_model,
-                optimizer=optimizer,
                 scheduler=scheduler,
                 data_status=gather_list,
                 logger=logger,
-                fsdp_config=fsdp_config,
                 tokenizer=tokenizer,
                 vae_model=vae_model if training_args.visual_gen else None,
                 model_args=model_args,
@@ -1489,11 +1420,12 @@ def main():
                 tensorboard_run_name=tensorboard_run_name if dist.get_rank() == 0 else None,
                 tensorboard_log_dir=tensorboard_dir if (dist.get_rank() == 0 and writer is not None) else None,
             )
-            
+
+            # Checkpoint rotation (keep latest N)
             if dist.get_rank() == 0:
                 all_dirs = glob.glob(os.path.join(training_args.checkpoint_dir, "*"))
                 ckpt_dirs = []
-                
+
                 for d in all_dirs:
                     if os.path.isdir(d):
                         dirname = os.path.basename(d)
@@ -1502,9 +1434,9 @@ def main():
                             ckpt_dirs.append(d)
                         except ValueError:
                             continue
-                
+
                 ckpt_dirs = sorted(ckpt_dirs, key=lambda x: int(os.path.basename(x)))
-                
+
                 while len(ckpt_dirs) > training_args.max_checkpoints:
                     oldest = ckpt_dirs.pop(0)
                     shutil.rmtree(oldest)
