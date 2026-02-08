@@ -8,3 +8,4 @@
 flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
 **/*stage1*/**  
 *.pdf
+*deepspeed_train.log*
